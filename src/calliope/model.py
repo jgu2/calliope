@@ -153,6 +153,9 @@ class Model:
             scenario (str | None): scenario specified by users
             data_source_dfs (dict[str, pd.DataFrame] | None, optional): files with additional model information. Defaults to None.
         """
+        if "links" in model_definition:
+            model_definition["techs"].update(model_definition.pop("links"))
+
         # First pass to check top-level keys are all good
         validate_dict(model_definition, CONFIG_SCHEMA, "Model definition")
 
