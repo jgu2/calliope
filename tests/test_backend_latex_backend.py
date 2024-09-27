@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 import xarray as xr
+
 from calliope import exceptions
 from calliope.backend import latex_backend_model
 
@@ -360,6 +361,11 @@ class TestLatexBackendModel:
 
                     foobar
 
+                    \textbf{Uses}:
+                    \begin{itemize}
+                        \item no_dims
+                    \end{itemize}
+
                     \textbf{Default}: 0
 
                     \begin{equation}
@@ -393,6 +399,10 @@ class TestLatexBackendModel:
 
                     foobar
 
+                    **Uses**:
+
+                    * no_dims
+
                     **Default**: 0
 
                     .. container:: scrolling-wrapper
@@ -424,6 +434,10 @@ class TestLatexBackendModel:
                     ### expr
 
                     foobar
+
+                    **Uses**:
+
+                    * [no_dims](#no_dims)
 
                     **Default**: 0
 
@@ -488,7 +502,7 @@ class TestLatexBackendModel:
                     """
         )
 
-    def test_generate_math_doc_mkdocs_tabbed(self, dummy_model_data):
+    def test_generate_math_doc_mkdocs_features_tabs(self, dummy_model_data):
         backend_model = latex_backend_model.LatexBackendModel(dummy_model_data)
         backend_model.add_global_expression(
             "expr",
@@ -498,7 +512,7 @@ class TestLatexBackendModel:
                 "default": 0,
             },
         )
-        doc = backend_model.generate_math_doc(format="md", mkdocs_tabbed=True)
+        doc = backend_model.generate_math_doc(format="md", mkdocs_features=True)
         assert doc == textwrap.dedent(
             r"""
 
@@ -527,14 +541,65 @@ class TestLatexBackendModel:
                     """
         )
 
-    def test_generate_math_doc_mkdocs_tabbed_not_in_md(self, dummy_model_data):
+    def test_generate_math_doc_mkdocs_features_admonition(self, dummy_model_data):
+        backend_model = latex_backend_model.LatexBackendModel(dummy_model_data)
+        backend_model.add_global_expression(
+            "expr",
+            {
+                "equations": [{"expression": "no_dims + 1"}],
+                "description": "foobar",
+                "default": 0,
+            },
+        )
+        doc = backend_model.generate_math_doc(format="md", mkdocs_features=True)
+        assert doc == textwrap.dedent(
+            r"""
+
+                    ## Where
+
+                    ### expr
+
+                    foobar
+
+                    ??? info "Uses"
+
+                        * [no_dims](#no_dims)
+
+                    **Default**: 0
+
+                    === "Math"
+
+                        $$
+                        \begin{array}{l}
+                            \quad \textit{no\_dims} + 1\\
+                        \end{array}
+                        $$
+
+                    === "YAML"
+
+                        ```yaml
+                        equations:
+                        - expression: no_dims + 1
+                        ```
+
+                    ## Parameters
+
+                    ### no_dims
+
+                    ??? info "Used in"
+
+                        * [expr](#expr)
+                    """
+        )
+
+    def test_generate_math_doc_mkdocs_features_not_in_md(self, dummy_model_data):
         backend_model = latex_backend_model.LatexBackendModel(dummy_model_data)
         with pytest.raises(exceptions.ModelError) as excinfo:
-            backend_model.generate_math_doc(format="rst", mkdocs_tabbed=True)
+            backend_model.generate_math_doc(format="rst", mkdocs_features=True)
 
         assert check_error_or_warning(
             excinfo,
-            "Cannot use MKDocs tabs when writing math to a non-Markdown file format.",
+            "Cannot use MKDocs features when writing math to a non-Markdown file format.",
         )
 
     @pytest.mark.parametrize(
