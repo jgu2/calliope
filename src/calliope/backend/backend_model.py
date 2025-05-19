@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import importlib
 import logging
 import time
 import typing
@@ -30,10 +31,14 @@ from calliope import exceptions
 from calliope.attrdict import AttrDict
 from calliope.backend import helper_functions, parsing
 from calliope.exceptions import warn as model_warn
-from calliope.io import load_config, to_yaml
-from calliope.preprocess.model_math import ORDERED_COMPONENTS_T, CalliopeMath
-from calliope.schemas import config_schema
-from calliope.util.schema import MODEL_SCHEMA, extract_from_schema
+from calliope.io import load_config
+from calliope.util.schema import (
+    MATH_SCHEMA,
+    MODEL_SCHEMA,
+    extract_from_schema,
+    update_then_validate_config,
+    validate_dict,
+)
 
 if TYPE_CHECKING:
     from calliope.backend.parsing import T as Tp
@@ -41,8 +46,14 @@ if TYPE_CHECKING:
 from calliope.exceptions import BackendError
 
 T = TypeVar("T")
-ALL_COMPONENTS_T = Literal["parameters", ORDERED_COMPONENTS_T]
-
+_COMPONENTS_T = Literal[
+    "parameters",
+    "variables",
+    "global_expressions",
+    "constraints",
+    "piecewise_constraints",
+    "objectives",
+]
 
 LOGGER = logging.getLogger(__name__)
 
@@ -50,14 +61,12 @@ LOGGER = logging.getLogger(__name__)
 class BackendModelGenerator(ABC):
     """Helper class for backends."""
 
-    LID_COMPONENTS: tuple[ALL_COMPONENTS_T, ...] = typing.get_args(ALL_COMPONENTS_T)
+    _VALID_COMPONENTS: tuple[_COMPONENTS_T, ...] = typing.get_args(_COMPONENTS_T)
     _COMPONENT_ATTR_METADATA = [
         "description",
         "unit",
         "default",
-        "type",
         "title",
-        "sense",
         "math_repr",
         "original_dtype",
     ]
@@ -65,29 +74,23 @@ class BackendModelGenerator(ABC):
     _PARAM_TITLES = extract_from_schema(MODEL_SCHEMA, "title")
     _PARAM_DESCRIPTIONS = extract_from_schema(MODEL_SCHEMA, "description")
     _PARAM_UNITS = extract_from_schema(MODEL_SCHEMA, "x-unit")
-    _PARAM_TYPE = extract_from_schema(MODEL_SCHEMA, "x-type")
-    objective: str
-    """Optimisation problem objective name."""
 
-    def __init__(
-        self, inputs: xr.Dataset, math: CalliopeMath, build_config: config_schema.Build
-    ):
+    def __init__(self, inputs: xr.Dataset, **kwargs):
         """Abstract base class to build a representation of the optimisation problem.
 
         Args:
             inputs (xr.Dataset): Calliope model data.
-            math (CalliopeMath): Calliope math.
-            build_config: Build configuration options.
+            **kwargs (Any): build configuration overrides.
         """
         self._dataset = xr.Dataset()
         self.inputs = inputs.copy()
         self.inputs.attrs = deepcopy(inputs.attrs)
-        self.config = build_config
-        self.math: CalliopeMath = deepcopy(math)
-        self._solve_logger = logging.getLogger(__name__ + ".<solve>")
-
+        self.inputs.attrs["config"]["build"] = update_then_validate_config(
+            "build", self.inputs.attrs["config"], **kwargs
+        )
         self._check_inputs()
-        self.math.validate()
+
+        self._solve_logger = logging.getLogger(__name__ + ".<solve>")
 
     @abstractmethod
     def add_parameter(
@@ -173,17 +176,9 @@ class BackendModelGenerator(ABC):
             objective_dict (parsing.UnparsedObjective): Unparsed objective configuration dictionary.
         """
 
-    @abstractmethod
-    def set_objective(self, name: str) -> None:
-        """Set a built objective to be the optimisation objective.
-
-        Args:
-            name (str): name of the objective.
-        """
-
     def log(
         self,
-        component_type: ALL_COMPONENTS_T,
+        component_type: _COMPONENTS_T,
         component_name: str,
         message: str,
         level: Literal["info", "warning", "debug", "error", "critical"] = "debug",
@@ -191,7 +186,7 @@ class BackendModelGenerator(ABC):
         """Log to module-level logger with some prettification of the message.
 
         Args:
-            component_type (ALL_COMPONENTS_T): type of component.
+            component_type (_COMPONENTS_T): type of component.
             component_name (str): name of the component.
             message (str): message to log.
             level (Literal["info", "warning", "debug", "error", "critical"], optional): log level. Defaults to "debug".
@@ -208,7 +203,6 @@ class BackendModelGenerator(ABC):
             "equation_name": "",
             "backend_interface": self,
             "input_data": self.inputs,
-            "build_config": self.config,
             "helper_functions": helper_functions._registry["where"],
             "apply_where": True,
             "references": set(),
@@ -227,39 +221,20 @@ class BackendModelGenerator(ABC):
             check_results["warn"], check_results["fail"]
         )
 
-    def _validate_math_string_parsing(self) -> None:
-        """Validate that `expression` and `where` strings of the math dictionary can be successfully parsed.
-
-        NOTE: strings are not checked for evaluation validity.
-        Evaluation issues will be raised only on adding a component to the backend.
-        """
-        validation_errors: dict = dict()
-        for component_group in typing.get_args(ORDERED_COMPONENTS_T):
-            for name, dict_ in self.math.data[component_group].items():
-                parsed = parsing.ParsedBackendComponent(component_group, name, dict_)
-                parsed.parse_top_level_where(errors="ignore")
-                parsed.parse_equations(self.valid_component_names, errors="ignore")
-                if not parsed._is_valid:
-                    validation_errors[f"{component_group}:{name}"] = parsed._errors
-
-        if validation_errors:
-            exceptions.print_warnings_and_raise_errors(
-                during="math string parsing (marker indicates where parsing stopped, but may not point to the root cause of the issue)",
-                errors=validation_errors,
-            )
-
-        LOGGER.info("Optimisation Model | Validated math strings.")
-
-    def add_optimisation_components(self) -> None:
-        """Parse math and inputs and set optimisation problem."""
+    def add_all_math(self):
+        """Parse and all the math stored in the input data."""
+        self._add_run_mode_math()
         # The order of adding components matters!
         # 1. Variables, 2. Global Expressions, 3. Constraints, 4. Objectives
-        self._add_all_inputs_as_parameters()
-        if self.config.pre_validate_math_strings:
-            self._validate_math_string_parsing()
-        for components in typing.get_args(ORDERED_COMPONENTS_T):
+        for components in [
+            "variables",
+            "global_expressions",
+            "constraints",
+            "piecewise_constraints",
+            "objectives",
+        ]:
             component = components.removesuffix("s")
-            for name, dict_ in self.math.data[components].items():
+            for name, dict_ in self.inputs.math[components].items():
                 start = time.time()
                 getattr(self, f"add_{component}")(name, dict_)
                 end = time.time() - start
@@ -268,12 +243,38 @@ class BackendModelGenerator(ABC):
                 )
             LOGGER.info(f"Optimisation Model | {components} | Generated.")
 
+    def _add_run_mode_math(self) -> None:
+        """If not given in the add_math list, override model math with run mode math."""
+        # FIXME: available modes should not be hardcoded here. They should come from a YAML schema.
+        mode = self.inputs.attrs["config"].build.mode
+        add_math = self.inputs.attrs["applied_additional_math"]
+        not_run_mode = {"plan", "operate", "spores"}.difference([mode])
+        run_mode_mismatch = not_run_mode.intersection(add_math)
+        if run_mode_mismatch:
+            exceptions.warn(
+                f"Running in {mode} mode, but run mode(s) {run_mode_mismatch} "
+                "math being loaded from file via the model configuration"
+            )
+
+        if mode != "plan" and mode not in add_math:
+            LOGGER.debug(f"Updating math formulation with {mode} mode math.")
+            filepath = importlib.resources.files("calliope") / "math" / f"{mode}.yaml"
+            self.inputs.math.union(AttrDict.from_yaml(filepath), allow_override=True)
+
+        validate_dict(self.inputs.math, MATH_SCHEMA, "math")
+
     def _add_component(
         self,
         name: str,
         component_dict: Tp,
         component_setter: Callable,
-        component_type: ORDERED_COMPONENTS_T,
+        component_type: Literal[
+            "variables",
+            "global_expressions",
+            "constraints",
+            "piecewise_constraints",
+            "objectives",
+        ],
         break_early: bool = True,
     ) -> parsing.ParsedBackendComponent | None:
         """Generalised function to add a optimisation problem component array to the model.
@@ -283,7 +284,7 @@ class BackendModelGenerator(ABC):
                 this name must be available in the input math provided on initialising the class.
             component_dict (Tp): unparsed YAML dictionary configuration.
             component_setter (Callable): function to combine evaluated xarray DataArrays into backend component objects.
-            component_type (Literal["variables", "global_expressions", "constraints", "piecewise_constraints", "objectives"]):
+            component_type (Literal["variables", "global_expressions", "constraints", "objectives"]):
                 type of the added component.
             break_early (bool, optional): break if the component is not active. Defaults to True.
 
@@ -296,8 +297,8 @@ class BackendModelGenerator(ABC):
         """
         references: set[str] = set()
 
-        if name not in self.math.data[component_type]:
-            self.math.add(AttrDict({f"{component_type}.{name}": component_dict}))
+        if name not in self.inputs.math.get(component_type, {}):
+            self.inputs.math.set_key(f"{component_type}.name", component_dict)
 
         if break_early and not component_dict.get("active", True):
             self.log(
@@ -367,7 +368,7 @@ class BackendModelGenerator(ABC):
         return parsed_component
 
     @abstractmethod
-    def delete_component(self, key: str, component_type: ALL_COMPONENTS_T) -> None:
+    def delete_component(self, key: str, component_type: _COMPONENTS_T) -> None:
         """Delete a list object from the backend model object.
 
         Args:
@@ -376,7 +377,7 @@ class BackendModelGenerator(ABC):
         """
 
     @abstractmethod
-    def _create_obj_list(self, key: str, component_type: ALL_COMPONENTS_T) -> None:
+    def _create_obj_list(self, key: str, component_type: _COMPONENTS_T) -> None:
         """Attach an empty list object to the backend model object.
 
         The attachment may be a backend-specific subclass of a standard list object.
@@ -408,7 +409,7 @@ class BackendModelGenerator(ABC):
             if param_name in self.parameters.keys():
                 continue
             elif (
-                self.config.mode != "operate"
+                self.inputs.attrs["config"]["build"]["mode"] != "operate"
                 and param_name
                 in extract_from_schema(MODEL_SCHEMA, "x-operate-param").keys()
             ):
@@ -429,7 +430,7 @@ class BackendModelGenerator(ABC):
         self,
         name: str,
         da: xr.DataArray,
-        obj_type: ALL_COMPONENTS_T,
+        obj_type: _COMPONENTS_T,
         unparsed_dict: parsing.UNPARSED_DICTS | dict,
         references: set | None = None,
     ):
@@ -438,7 +439,7 @@ class BackendModelGenerator(ABC):
         Args:
             name (str): Name of entry in dataset.
             da (xr.DataArray): Data to add.
-            obj_type (ALL_COMPONENTS_T): Type of backend objects in the array.
+            obj_type (_COMPONENTS_T): Type of backend objects in the array.
             unparsed_dict (parsing.UNPARSED_DICTS | dict):
                 Dictionary describing the object being added, from which descriptor
                 attributes will be extracted and added to the array attributes.
@@ -458,7 +459,7 @@ class BackendModelGenerator(ABC):
                 yaml_snippet_attrs[attr] = val
 
         if yaml_snippet_attrs:
-            add_attrs["yaml_snippet"] = to_yaml(yaml_snippet_attrs)
+            add_attrs["yaml_snippet"] = AttrDict(yaml_snippet_attrs).to_yaml()
 
         da.attrs = {
             "obj_type": obj_type,
@@ -534,8 +535,8 @@ class BackendModelGenerator(ABC):
             da = tuple(arr.fillna(np.nan) for arr in da)
         return da
 
-    def _raise_error_on_preexistence(self, key: str, obj_type: ALL_COMPONENTS_T):
-        """Detect if preexistent errors are present in the dataset.
+    def _raise_error_on_preexistence(self, key: str, obj_type: _COMPONENTS_T):
+        """Detect if preexistance errors are present the dataset.
 
         We do not allow any overlap of backend object names since they all have to
         co-exist in the backend dataset. I.e., users cannot overwrite any backend
@@ -543,7 +544,7 @@ class BackendModelGenerator(ABC):
 
         Args:
             key (str): Backend object name
-            obj_type (ALL_COMPONENTS_T): Object type.
+            obj_type (Literal["variables", "constraints", "objectives", "parameters", "expressions"]): Object type.
 
         Raises:
             BackendError: if `key` already exists in the backend model
@@ -606,7 +607,7 @@ class BackendModelGenerator(ABC):
         in_math = set(
             name
             for component in ["variables", "global_expressions"]
-            for name in self.math.data[component]
+            for name in self.inputs.math[component].keys()
         )
         return in_data.union(in_math)
 
@@ -614,22 +615,15 @@ class BackendModelGenerator(ABC):
 class BackendModel(BackendModelGenerator, Generic[T]):
     """Calliope's backend model functionality."""
 
-    def __init__(
-        self,
-        inputs: xr.Dataset,
-        math: CalliopeMath,
-        build_config: config_schema.Build,
-        instance: T,
-    ) -> None:
+    def __init__(self, inputs: xr.Dataset, instance: T, **kwargs) -> None:
         """Abstract base class to build backend models that interface with solvers.
 
         Args:
             inputs (xr.Dataset): Calliope model data.
-            math (CalliopeMath): Calliope math.
             instance (T): Interface model instance.
-            build_config: Build configuration options.
+            **kwargs: build configuration overrides.
         """
-        super().__init__(inputs, math, build_config)
+        super().__init__(inputs, **kwargs)
         self._instance = instance
         self.shadow_prices: ShadowPrices
         self._has_verbose_strings: bool = False
@@ -939,7 +933,13 @@ class BackendModel(BackendModelGenerator, Generic[T]):
 
     @abstractmethod
     def _solve(
-        self, solve_config: config_schema.Solve, warmstart: bool = False
+        self,
+        solver: str,
+        solver_io: str | None = None,
+        solver_options: dict | None = None,
+        save_logs: str | None = None,
+        warmstart: bool = False,
+        **solve_config,
     ) -> xr.Dataset:
         """Optimise built model.
 
@@ -948,10 +948,17 @@ class BackendModel(BackendModelGenerator, Generic[T]):
         values at optimality.
 
         Args:
-            solve_config: (config_schema.Solve): Calliope Solve configuration object.
+            solver (str): Name of solver to optimise with.
+            solver_io (str | None, optional): If chosen solver has a python interface, set to "python" for potential
+                performance gains, otherwise should be left as None. Defaults to None.
+            solver_options (dict | None, optional): Solver options/parameters to pass directly to solver.
+                See solver documentation for available parameters that can be influenced. Defaults to None.
+            save_logs (str | None, optional): If given, solver logs and built LP file will be saved to this filepath.
+                Defaults to None.
             warmstart (bool, optional): If True, and the chosen solver is capable of implementing it, an existing
                 optimal solution will be used to warmstart the next solve run.
                 Defaults to False.
+            **solve_config: solve configuration overrides.
 
         Returns:
             xr.Dataset: Dataset of decision variable values if the solution was optimal/feasible,
@@ -1019,13 +1026,19 @@ class BackendModel(BackendModelGenerator, Generic[T]):
         Args:
             references (set[str]): names of optimisation problem components.
         """
-        for component in typing.get_args(ORDERED_COMPONENTS_T):
+        ordered_components = [
+            "variables",
+            "global_expressions",
+            "constraints",
+            "objectives",
+        ]
+        for component in ordered_components:
             # Rebuild references in the order they are found in the backend dataset
             # which should correspond to the order they were added to the optimisation problem.
             refs = [k for k in getattr(self, component).data_vars if k in references]
             for ref in refs:
                 self.delete_component(ref, component)
-                dict_ = self.math.data[component][ref]
+                dict_ = self.inputs.attrs["math"][component][ref]
                 getattr(self, "add_" + component.removesuffix("s"))(ref, dict_)
 
     def _get_component(self, name: str, component_group: str) -> xr.DataArray:
@@ -1142,7 +1155,7 @@ class ShadowPrices:
         valid_constraints = shadow_prices.intersection(self.available_constraints)
         if invalid_constraints:
             model_warn(
-                f"Invalid constraints {invalid_constraints} in `config_schema.solve.shadow_prices`. "
+                f"Invalid constraints {invalid_constraints} in `config.solve.shadow_prices`. "
                 "Their shadow prices will not be tracked."
             )
         # Only actually activate shadow price tracking if at least one valid

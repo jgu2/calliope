@@ -11,7 +11,7 @@ P = ParamSpec("P")
 T = TypeVar("T")
 
 
-def relative_path(base_path_file: str | Path | None, path: str | Path) -> Path:
+def relative_path(base_path_file, path) -> Path:
     """Path standardization.
 
     If ``path`` is not absolute, it is interpreted as relative to the
@@ -19,13 +19,13 @@ def relative_path(base_path_file: str | Path | None, path: str | Path) -> Path:
     """
     # Check if base_path_file is a string because it might be an AttrDict
     path = Path(path)
-    if path.is_absolute():
-        return path
-    else:
-        base_path = Path(base_path_file) if base_path_file is not None else Path.cwd()
-        if base_path.is_file():
-            base_path = base_path.parent
-        return base_path.absolute() / path
+    if base_path_file is not None:
+        base_path_file = Path(base_path_file)
+        if base_path_file.is_file():
+            base_path_file = base_path_file.parent
+        if not path.is_absolute():
+            path = base_path_file.absolute() / path
+    return path
 
 
 def listify(var: Any) -> list:
@@ -40,34 +40,8 @@ def listify(var: Any) -> list:
     Returns:
         list: List containing `var` or elements of `var` (if input was a non-string iterable).
     """
-    if var is None:
-        var = []
-    elif not isinstance(var, str) and hasattr(var, "__iter__"):
+    if not isinstance(var, str) and hasattr(var, "__iter__"):
         var = list(var)
     else:
         var = [var]
     return var
-
-
-def get_dot_attr(var: Any, attr: str) -> Any:
-    """Get nested attributes in dot notation.
-
-    Works for nested objects (e.g., dictionaries, pydantic models).
-
-    Args:
-        var (Any): Object to extract nested attributes from.
-        attr (str): Name of the attribute (e.g., "foo.bar").
-
-    Returns:
-        Any: Value at the given location.
-    """
-    levels = attr.split(".", 1)
-
-    if isinstance(var, dict):
-        value = var[levels[0]]
-    else:
-        value = getattr(var, levels[0])
-
-    if len(levels) > 1:
-        value = get_dot_attr(value, levels[1])
-    return value

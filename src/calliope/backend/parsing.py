@@ -311,7 +311,6 @@ class ParsedBackendEquation:
                 helper_functions=helper_functions._registry["where"],
                 input_data=backend_interface.inputs,
                 backend_interface=backend_interface,
-                build_config=backend_interface.config,
                 references=references if references is not None else set(),
                 apply_where=True,
             )
@@ -851,13 +850,13 @@ class ParsedBackendComponent(ParsedBackendEquation):
         return where
 
     def raise_caught_errors(self):
-        """Pipe parsing errors to the ModelError bullet point list generator."""
+        """If there are any parsing errors, pipe them to the ModelError bullet point list generator."""
         if not self._is_valid:
             exceptions.print_warnings_and_raise_errors(
                 errors={f"{self.name}": self._errors},
                 during=(
                     "math string parsing (marker indicates where parsing stopped, "
-                    "but may not point to the root cause of the issue)"
+                    "which might not be the root cause of the issue; sorry...)"
                 ),
                 bullet=self._ERR_BULLET,
             )

@@ -1,5 +1,3 @@
-import logging
-
 import gurobipy
 import pytest  # noqa: F401
 import xarray as xr
@@ -30,7 +28,7 @@ class TestNewBackend:
     @pytest.fixture
     def simple_supply_gurobi_func(self):
         m = build_model({}, "simple_supply,two_hours,investment_costs")
-        m.build(backend="gurobi", pre_validate_math_strings=False)
+        m.build(backend="gurobi")
         m.solve()
         return m
 
@@ -98,31 +96,6 @@ class TestNewBackend:
         )
         assert "foo" in simple_supply_gurobi.backend.objectives
 
-    def test_default_objective_set(self, simple_supply_longnames):
-        obj = simple_supply_longnames.backend._instance.getObjective()
-
-        assert "flow_cap" in str(obj)
-        assert simple_supply_longnames.backend.objective == "min_cost_optimisation"
-
-    def test_new_objective_set(self, simple_supply_gurobi_func):
-        simple_supply_gurobi_func.backend.add_objective(
-            "foo", {"equations": [{"expression": "bigM"}], "sense": "minimise"}
-        )
-        simple_supply_gurobi_func.backend.set_objective("foo")
-        simple_supply_gurobi_func.backend.verbose_strings()
-        obj = simple_supply_gurobi_func.backend._instance.getObjective()
-        assert simple_supply_gurobi_func.backend.objective == "foo"
-
-        assert "flow_cap" not in str(obj)
-
-    def test_new_objective_set_log(self, caplog, simple_supply_gurobi_func):
-        caplog.set_level(logging.INFO)
-        simple_supply_gurobi_func.backend.add_objective(
-            "foo", {"equations": [{"expression": "bigM"}], "sense": "minimise"}
-        )
-        simple_supply_gurobi_func.backend.set_objective("foo")
-        assert ":foo | Objective activated." in caplog.text
-
     def test_object_string_representation(self, simple_supply_gurobi):
         assert (
             simple_supply_gurobi.backend.variables.flow_out.sel(
@@ -181,7 +154,7 @@ class TestNewBackend:
 
         assert "flow_cap[a, test_supply_elec, electricity]" in obj.sel(dims).item()
         # parameters are not gurobi objects, so we don't get their names in our strings
-        assert "cost_flow_cap" not in obj.sel(dims).item()
+        assert "parameters[cost_interest_rate]" not in obj.sel(dims).item()
 
         assert not obj.coords_in_name
 

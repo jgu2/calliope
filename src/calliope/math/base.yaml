@@ -196,10 +196,10 @@ constraints:
             (
               (timesteps=get_val_at_index(timesteps=0) AND cyclic_storage=True)
               OR NOT timesteps=get_val_at_index(timesteps=0)
-            ) AND NOT cluster_first_timestep=True
+            ) AND NOT lookup_cluster_first_timestep=True
           expression: (1 - storage_loss) ** roll(timestep_resolution, timesteps=1) * roll(storage, timesteps=1)
         - where: >-
-            cluster_first_timestep=True AND NOT
+            lookup_cluster_first_timestep=True AND NOT
             (timesteps=get_val_at_index(timesteps=0) AND NOT cyclic_storage=True)
           expression: >-
             (1 - storage_loss) **
@@ -265,7 +265,7 @@ constraints:
     slices:
       final_step:
         - expression: get_val_at_index(timesteps=-1)
-    active: true # optional; defaults to true.
+    active: true  # optional; defaults to true.
   # --8<-- [end:constraint]
 
   balance_transmission:
@@ -279,7 +279,7 @@ constraints:
 
   symmetric_transmission:
     description: >-
-      Fix the flow capacity of two `transmission` technologies representing the same link in the system.
+       Fix the flow capacity of two `transmission` technologies representing the same link in the system.
     foreach: [nodes, techs]
     where: "base_tech=transmission"
     equations:
@@ -369,7 +369,7 @@ constraints:
   storage_capacity_units_milp:
     description: >-
       Fix the storage capacity of any technology using integer units to define its capacity.
-    foreach: [nodes, techs]
+    foreach: [nodes, techs, carriers]
     where: "storage AND purchased_units AND storage_cap_per_unit"
     equations:
       - expression: storage_cap == purchased_units * storage_cap_per_unit
@@ -378,7 +378,7 @@ constraints:
     description: >-
       Fix the flow capacity of any technology using integer units to define its capacity.
     foreach: [nodes, techs, carriers]
-    where: "purchased_units AND flow_cap_per_unit"
+    where: "operating_units AND flow_cap_per_unit"
     equations:
       - expression: flow_cap == purchased_units * flow_cap_per_unit
 
@@ -394,18 +394,14 @@ constraints:
       - where: NOT flow_cap_max
         expression: flow_cap <= bigM * purchased_units
 
-  flow_capacity_minimum:
+  flow_capacity_min_purchase_milp:
     description: >-
       Set the lower bound on a technology's flow capacity,
-      for any technology with a non-zero lower bound,
-      with or without integer capacity purchasing.
+      for any technology with integer capacity purchasing.
     foreach: [nodes, techs, carriers]
-    where: "flow_cap_min"
+    where: "purchased_units AND flow_cap_min"
     equations:
-      - where: NOT purchased_units
-        expression: flow_cap >= flow_cap_min
-      - where: purchased_units
-        expression: flow_cap >= flow_cap_min * purchased_units
+      - expression: flow_cap >= flow_cap_min * purchased_units
 
   storage_capacity_max_purchase_milp:
     description: >-
@@ -416,44 +412,14 @@ constraints:
     equations:
       - expression: storage_cap <= storage_cap_max * purchased_units
 
-  storage_capacity_minimum:
+  storage_capacity_min_purchase_milp:
     description: >-
-      Set the lower bound on a technology's storage capacity
-      for any technology with a non-zero lower bound,
-      with or without integer capacity purchasing.
+      Set the lower bound on a technology's storage capacity,
+      for any technology with integer capacity purchasing.
     foreach: [nodes, techs]
-    where: "storage_cap_min"
+    where: "purchased_units AND storage_cap_min"
     equations:
-      - where: NOT purchased_units
-        expression: storage_cap >= storage_cap_min
-      - where: purchased_units
-        expression: storage_cap >= storage_cap_min * purchased_units
-
-  area_use_minimum:
-    description: >-
-      Set the lower bound on a technology's area use
-      for any technology with a non-zero lower bound,
-      with or without integer capacity purchasing.
-    foreach: [nodes, techs]
-    where: "area_use_min"
-    equations:
-      - where: NOT purchased_units
-        expression: area_use >= area_use_min
-      - where: purchased_units
-        expression: area_use >= area_use_min * purchased_units
-
-  source_capacity_minimum:
-    description: >-
-      Set the lower bound on a technology's source capacity
-      for any supply technology with a non-zero lower bound,
-      with or without integer capacity purchasing.
-    foreach: [nodes, techs]
-    where: "base_tech=supply AND source_cap_min"
-    equations:
-      - where: NOT purchased_units
-        expression: source_cap >= source_cap_min
-      - where: purchased_units
-        expression: source_cap >= source_cap_min * purchased_units
+      - expression: storage_cap >= storage_cap_min * purchased_units
 
   unit_capacity_max_systemwide_milp:
     description: >-
@@ -530,7 +496,7 @@ variables:
     unit: power
     foreach: [nodes, techs, carriers]
     bounds:
-      min: 0  # set in a distinct constraint to handle the integer purchase variable
+      min: flow_cap_min
       max: flow_cap_max
 
   link_flow_cap:
@@ -595,7 +561,7 @@ variables:
     foreach: [nodes, techs]
     where: "(area_use_min OR area_use_max OR area_use_per_flow_cap OR sink_unit=per_area OR source_unit=per_area)"
     bounds:
-      min: 0 # set in a distinct constraint to handle the integer purchase variable
+      min: area_use_min
       max: area_use_max
 
   source_use:
@@ -620,7 +586,7 @@ variables:
     foreach: [nodes, techs]
     where: "base_tech=supply"
     bounds:
-      min: 0 # set in a distinct constraint to handle the integer purchase variable
+      min: source_cap_min
       max: source_cap_max
 
   # --8<-- [start:variable]
@@ -633,11 +599,11 @@ variables:
     unit: energy
     foreach: [nodes, techs]
     where: "include_storage=True OR base_tech=storage"
-    domain: real # optional; defaults to real.
+    domain: real  # optional; defaults to real.
     bounds:
-      min: 0  # set in a distinct constraint to handle the integer purchase variable
+      min: storage_cap_min
       max: storage_cap_max
-    active: true # optional; defaults to true.
+    active: true  # optional; defaults to true.
   # --8<-- [end:variable]
 
   storage:
@@ -696,10 +662,6 @@ variables:
     description: >-
       Flow capacity that will be set to zero if the technology is not operating in a given
       timestep and will be set to the value of the decision variable `flow_cap` otherwise.
-      This is useful when you want to set a minimum flow capacity for any technology investment, but also want to allow the model to decide the capacity.
-      It is expected to only be used when `purchased_units_max == 1`,
-      i.e., the `purchased_units` decision variable is binary.
-      If `purchased_units_max > 1`, you may get strange results and should instead use the less flexible `flow_cap_per_unit`.
     default: 0
     unit: power
     foreach: [nodes, techs, carriers, timesteps]
@@ -759,6 +721,7 @@ variables:
       min: -.inf
       max: 0
 
+
 objectives:
   # --8<-- [start:objective]
   min_cost_optimisation:
@@ -791,7 +754,7 @@ objectives:
         - where: "NOT config.ensure_feasibility=True"
           expression: "0"
     sense: minimise
-    active: true # optional; defaults to true.
+    active: true  # optional; defaults to true.
   # --8<-- [end:objective]
 
 global_expressions:
@@ -825,7 +788,7 @@ global_expressions:
       - where: NOT base_tech=transmission
         expression: flow_in * flow_in_eff
 
-  cost_operation_variable:
+  cost_var:
     title: Variable operating costs
     description: >-
       The operating costs per timestep of a technology.
@@ -911,7 +874,7 @@ global_expressions:
   cost_investment:
     title: Total investment costs
     description: >-
-      The installation costs of a technology, including those linked to the nameplate capacity, land use, storage size, and binary/integer unit purchase.
+      The installation costs of a technology, including annualised investment costs and annual maintenance costs.
     default: 0
     unit: cost
     foreach: [nodes, techs, costs]
@@ -919,26 +882,19 @@ global_expressions:
       cost_investment_flow_cap OR cost_investment_storage_cap OR cost_investment_source_cap OR
       cost_investment_area_use OR cost_investment_purchase
     equations:
-      - expression: >-
-          sum(default_if_empty(cost_investment_flow_cap, 0), over=carriers) +
-          default_if_empty(cost_investment_storage_cap, 0) +
-          default_if_empty(cost_investment_source_cap, 0) +
-          default_if_empty(cost_investment_area_use, 0) +
-          default_if_empty(cost_investment_purchase, 0)
-
-  cost_investment_annualised:
-    title: Equivalent annual investment costs
-    description: >-
-      An annuity factor has been applied to scale lifetime investment costs to annual values that can be directly compared to operation costs.
-      If the modeling period is not equal to one full year, this will be scaled accordingly.
-    default: 0
-    unit: cost
-    foreach: [nodes, techs, costs]
-    where: cost_investment
-    equations:
-      - expression: $annualisation_weight * $depreciation_rate * cost_investment
+      - expression: >
+          $annualisation_weight * (
+            ($depreciation_rate + cost_om_annual_investment_fraction) * (
+              sum(default_if_empty(cost_investment_flow_cap, 0), over=carriers) +
+              default_if_empty(cost_investment_storage_cap, 0) +
+              default_if_empty(cost_investment_source_cap, 0) +
+              default_if_empty(cost_investment_area_use, 0) +
+              default_if_empty(cost_investment_purchase, 0)
+            )
+            + sum(cost_om_annual * flow_cap, over=carriers)
+          )
     sub_expressions:
-      annualisation_weight: &annualisation_weight
+      annualisation_weight:
         - expression: sum(timestep_resolution * timestep_weights, over=timesteps) / 8760
       depreciation_rate:
         - where: cost_depreciation_rate
@@ -950,24 +906,6 @@ global_expressions:
             (cost_interest_rate * ((1 + cost_interest_rate) ** lifetime)) /
             (((1 + cost_interest_rate) ** lifetime) - 1)
 
-  cost_operation_fixed:
-    title: Total fixed operation costs
-    description: >-
-      The fixed, annual operation costs of a technology, which are calculated relative to investment costs.
-      If the modeling period is not equal to one full year, this will be scaled accordingly.
-    default: 0
-    unit: cost
-    foreach: [nodes, techs, costs]
-    where: cost_investment AND (cost_om_annual OR cost_om_annual_investment_fraction)
-    equations:
-      - expression: >-
-          $annualisation_weight * (
-            sum(cost_om_annual * flow_cap, over=carriers) +
-            cost_investment * cost_om_annual_investment_fraction
-          )
-    sub_expressions:
-      annualisation_weight: *annualisation_weight
-
   # --8<-- [start:expression]
   cost:
     title: Total costs
@@ -977,19 +915,21 @@ global_expressions:
     default: 0
     unit: cost
     foreach: [nodes, techs, costs]
-    where: "cost_investment_annualised OR cost_operation_variable OR cost_operation_fixed"
+    where: "cost_investment OR cost_var"
     equations:
-      - expression: >-
-          default_if_empty(cost_investment_annualised, 0) +
-          $cost_operation_sum +
-          default_if_empty(cost_operation_fixed, 0)
+      - expression: $cost_investment + $cost_var_sum
     sub_expressions:
-      cost_operation_sum:
-        - where: "cost_operation_variable"
-          expression: sum(cost_operation_variable, over=timesteps)
-        - where: "NOT cost_operation_variable"
+      cost_investment:
+        - where: "cost_investment"
+          expression: cost_investment
+        - where: "NOT cost_investment"
           expression: "0"
-    active: true # optional; defaults to true.
+      cost_var_sum:
+        - where: "cost_var"
+          expression: sum(cost_var, over=timesteps)
+        - where: "NOT cost_var"
+          expression: "0"
+    active: true  # optional; defaults to true.
   # --8<-- [end:expression]
 
 piecewise_constraints: {}

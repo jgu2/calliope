@@ -7,12 +7,10 @@ import pytest
 from pyomo.repn.tests import lp_diff
 
 from calliope import AttrDict
-from calliope.io import read_rich_yaml
 
 from .common.util import build_lp, build_test_model
 
 CALLIOPE_DIR: Path = importlib.resources.files("calliope")
-PLAN_MATH: AttrDict = read_rich_yaml(CALLIOPE_DIR / "math" / "plan.yaml")
 
 
 @pytest.fixture(scope="class")
@@ -48,71 +46,55 @@ class TestBaseMath:
 
     @pytest.fixture(scope="class")
     def base_math(self):
-        return read_rich_yaml(CALLIOPE_DIR / "math" / "plan.yaml")
+        return AttrDict.from_yaml(CALLIOPE_DIR / "math" / "base.yaml")
 
-    @pytest.mark.parametrize(
-        ("variable", "constraint", "overrides"),
-        [
-            ("flow_cap", "flow_capacity_minimum", {}),
-            (
-                "storage_cap",
-                "storage_capacity_minimum",
-                {"techs.test_supply_elec.include_storage": True},
-            ),
-            ("area_use", "area_use_minimum", {}),
-            ("source_cap", "source_capacity_minimum", {}),
-        ],
-    )
-    def test_capacity_variables_and_bounds(
-        self, compare_lps, variable, constraint, overrides
-    ):
-        """Check that variables are initiated with the appropriate bounds,
-        and that the lower bound is updated from zero via a separate constraint if required.
-        """
-        constraint_full = f"constraints.{constraint}"
-        self.TEST_REGISTER.add(f"variables.{variable}")
-        self.TEST_REGISTER.add(constraint_full)
+    def test_flow_cap(self, compare_lps):
+        self.TEST_REGISTER.add("variables.flow_cap")
         model = build_test_model(
             {
-                f"nodes.b.techs.test_supply_elec.{variable}_max": 100,
-                f"nodes.a.techs.test_supply_elec.{variable}_min": 1,
-                f"nodes.a.techs.test_supply_elec.{variable}_max": np.nan,
-                **overrides,
+                "nodes.b.techs.test_supply_elec.flow_cap_max": 100,
+                "nodes.a.techs.test_supply_elec.flow_cap_min": 1,
+                "nodes.a.techs.test_supply_elec.flow_cap_max": np.nan,
             },
             "simple_supply,two_hours,investment_costs",
         )
-        # Custom objective ensures that all variables appear in the LP file.
-        # Variables not found in either an objective or constraint will never appear in the LP.
-        sum_in_objective = "[nodes]" if variable != "flow_cap" else "[nodes, carriers]"
-        custom_objective = {
-            "objectives.foo": {
-                "equations": [
-                    {
-                        "expression": f"sum({variable}[techs=test_supply_elec], over={sum_in_objective})"
-                    }
-                ],
-                "sense": "minimise",
+        custom_math = {
+            # need the variable defined in a constraint/objective for it to appear in the LP file bounds
+            "objectives": {
+                "foo": {
+                    "equations": [
+                        {
+                            "expression": "sum(flow_cap[techs=test_supply_elec], over=[nodes, carriers])"
+                        }
+                    ],
+                    "sense": "minimise",
+                }
             }
         }
-        custom_math = AttrDict(
-            {constraint_full: PLAN_MATH.get_key(constraint_full), **custom_objective}
-        )
-        compare_lps(model, custom_math, variable)
+        compare_lps(model, custom_math, "flow_cap")
+
+        # "flow_cap" is the name of the lp file
 
     def test_storage_max(self, compare_lps):
         self.TEST_REGISTER.add("constraints.storage_max")
         model = build_test_model(scenario="simple_storage,two_hours,investment_costs")
         custom_math = {
-            "constraints": {"storage_max": PLAN_MATH.constraints.storage_max}
+            "constraints": {"storage_max": model.math.constraints.storage_max}
         }
         compare_lps(model, custom_math, "storage_max")
 
     def test_flow_out_max(self, compare_lps):
         self.TEST_REGISTER.add("constraints.flow_out_max")
-        model = build_test_model({}, "simple_supply,two_hours,investment_costs")
+        model = build_test_model(
+            {
+                "nodes.a.techs.test_supply_elec.flow_cap_min": 100,
+                "nodes.a.techs.test_supply_elec.flow_cap_max": 100,
+            },
+            "simple_supply,two_hours,investment_costs",
+        )
 
         custom_math = {
-            "constraints": {"flow_out_max": PLAN_MATH.constraints.flow_out_max}
+            "constraints": {"flow_out_max": model.math.constraints.flow_out_max}
         }
         compare_lps(model, custom_math, "flow_out_max")
 
@@ -124,7 +106,7 @@ class TestBaseMath:
         )
         custom_math = {
             "constraints": {
-                "balance_conversion": PLAN_MATH.constraints.balance_conversion
+                "balance_conversion": model.math.constraints.balance_conversion
             }
         }
 
@@ -136,7 +118,7 @@ class TestBaseMath:
             {}, "simple_supply_plus,resample_two_days,investment_costs"
         )
         custom_math = {
-            "constraints": {"my_constraint": PLAN_MATH.constraints.source_max}
+            "constraints": {"my_constraint": model.math.constraints.source_max}
         }
         compare_lps(model, custom_math, "source_max")
 
@@ -147,7 +129,9 @@ class TestBaseMath:
             {"techs.test_link_a_b_elec.one_way": True}, "simple_conversion,two_hours"
         )
         custom_math = {
-            "constraints": {"my_constraint": PLAN_MATH.constraints.balance_transmission}
+            "constraints": {
+                "my_constraint": model.math.constraints.balance_transmission
+            }
         }
         compare_lps(model, custom_math, "balance_transmission")
 
@@ -162,14 +146,14 @@ class TestBaseMath:
             "simple_storage,two_hours",
         )
         custom_math = {
-            "constraints": {"my_constraint": PLAN_MATH.constraints.balance_storage}
+            "constraints": {"my_constraint": model.math.constraints.balance_storage}
         }
         compare_lps(model, custom_math, "balance_storage")
 
     @pytest.mark.parametrize("with_export", [True, False])
-    def test_cost_operation_variable(self, compare_lps, with_export):
+    def test_cost_var_with_export(self, compare_lps, with_export):
         """Test variable costs in the objective."""
-        self.TEST_REGISTER.add("global_expressions.cost_operation_variable")
+        self.TEST_REGISTER.add("global_expressions.cost_var")
         override = {
             "techs.test_conversion_plus.cost_flow_out": {
                 "data": [1, 2],
@@ -212,7 +196,7 @@ class TestBaseMath:
                 "foo": {
                     "equations": [
                         {
-                            "expression": "sum(cost_operation_variable, over=[nodes, techs, costs, timesteps])"
+                            "expression": "sum(cost_var, over=[nodes, techs, costs, timesteps])"
                         }
                     ],
                     "sense": "minimise",
@@ -220,7 +204,7 @@ class TestBaseMath:
             }
         }
         suffix = "_with_export" if with_export else ""
-        compare_lps(model, custom_math, f"cost_operation_variable{suffix}")
+        compare_lps(model, custom_math, f"cost_var{suffix}")
 
     @pytest.mark.xfail(reason="not all base math is in the test config dict yet")
     def test_all_math_registered(self, base_math):
@@ -249,7 +233,7 @@ class CustomMathExamples(ABC):
 
     @pytest.fixture(scope="class")
     def custom_math(self):
-        return read_rich_yaml(self.CUSTOM_MATH_DIR / self.YAML_FILEPATH)
+        return AttrDict.from_yaml(self.CUSTOM_MATH_DIR / self.YAML_FILEPATH)
 
     @pytest.fixture
     def build_and_compare(self, abs_filepath, compare_lps):
@@ -277,7 +261,7 @@ class CustomMathExamples(ABC):
                 overrides = {}
 
             model = build_test_model(
-                {"config.build.add_math": [abs_filepath], **overrides}, scenario
+                {"config.init.add_math": [abs_filepath], **overrides}, scenario
             )
 
             compare_lps(model, custom_math, filename)
@@ -786,9 +770,9 @@ class TestNetImportShare(CustomMathExamples):
     YAML_FILEPATH = "net_import_share.yaml"
     shared_overrides = {
         "parameters.net_import_share": 1.5,
-        "data_tables": {
+        "data_sources": {
             "demand_heat": {
-                "data": "data_tables/demand_heat.csv",
+                "source": "data_sources/demand_heat.csv",
                 "rows": "timesteps",
                 "columns": "nodes",
                 "select": {"nodes": "a"},
@@ -802,13 +786,13 @@ class TestNetImportShare(CustomMathExamples):
         },
         "techs": {
             "links_a_c_heat": {
-                "link_from": "a",
-                "link_to": "c",
+                "from": "a",
+                "to": "c",
                 "template": "test_transmission_heat",
             },
             "links_a_c_elec": {
-                "link_from": "a",
-                "link_to": "c",
+                "from": "a",
+                "to": "c",
                 "template": "test_transmission_elec",
             },
         },

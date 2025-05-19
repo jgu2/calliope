@@ -2,54 +2,43 @@ overrides:
   storage_inter_cluster:
     config.init:
       name: inter-cluster storage
-      time_cluster: cluster_days.csv
-    config.build:
       add_math: ["storage_inter_cluster"]
-  spores:
-    config:
-      init.name: SPORES solve mode
-      build.mode: spores
-      solve.spores.number: 2
-    parameters:
-      spores_slack: 0.1
+      time_cluster: cluster_days.csv
 
 config.init.name: base
 
 nodes:
-  A.techs: { demand_tech, conversion_tech, supply_tech, storage_tech }
-  B.techs: { demand_tech, conversion_tech, supply_tech, storage_tech }
+  A.techs: {demand_tech, conversion_tech, supply_tech, storage_tech}
+  B.techs: {demand_tech, conversion_tech, supply_tech, storage_tech}
 
 techs:
   tech_transmission:
-    base_tech: transmission
-    carrier_in: foo
-    carrier_out: foo
-    link_from: A
-    link_to: B
+    from: A
+    to: B
 
-data_tables:
+data_sources:
   techs:
-    data: techs.csv
+    source: techs.csv
     rows: [techs, parameters]
 
   nodes:
-    data: nodes.csv
+    source: nodes.csv
     rows: parameters
     add_dims:
       nodes: [A, B]
 
   tech_carrier:
-    data: tech_carrier.csv
+    source: tech_carrier.csv
     rows: [techs, carriers, parameters]
 
   costs:
-    data: costs.csv
+    source: costs.csv
     rows: [techs, parameters]
     add_dims:
       costs: monetary
 
   time_varying:
-    data: time_varying.csv
+    source: time_varying.csv
     rows: timesteps
     add_dims:
       parameters: sink_use_max

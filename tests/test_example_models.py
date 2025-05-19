@@ -7,14 +7,13 @@ import pytest
 
 import calliope
 from calliope import exceptions
-from calliope.io import read_rich_yaml
 
 from .common.util import check_error_or_warning
 
 approx = pytest.approx
 
 
-class TestModelPreprocessing:
+class TestModelPreproccessing:
     def test_preprocess_national_scale(self):
         calliope.examples.national_scale()
 
@@ -28,6 +27,7 @@ class TestModelPreprocessing:
     def test_preprocess_urban_scale(self):
         calliope.examples.urban_scale()
 
+    @pytest.mark.filterwarnings("ignore:(?s).*Integer:calliope.exceptions.ModelWarning")
     def test_preprocess_milp(self):
         calliope.examples.milp()
 
@@ -37,11 +37,11 @@ class TestModelPreprocessing:
 
 class TestNationalScaleExampleModelSenseChecks:
     @pytest.fixture(scope="class")
-    def nat_model_from_data_tables(self):
+    def nat_model_from_data_sources(self):
         df = pd.read_csv(
             calliope.examples._EXAMPLE_MODEL_DIR
             / "national_scale"
-            / "data_tables"
+            / "data_sources"
             / "time_varying_params.csv",
             index_col=0,
             header=[0, 1, 2, 3],
@@ -49,9 +49,9 @@ class TestNationalScaleExampleModelSenseChecks:
         model = calliope.Model(
             Path(__file__).parent
             / "common"
-            / "national_scale_from_data_tables"
+            / "national_scale_from_data_sources"
             / "model.yaml",
-            data_table_dfs={"time_varying_df": df},
+            data_source_dfs={"time_varying_df": df},
             time_subset=["2005-01-01", "2005-01-01"],
         )
         model.build()
@@ -65,13 +65,14 @@ class TestNationalScaleExampleModelSenseChecks:
         model.build()
         return model
 
-    @pytest.fixture(params=["nat_model", "nat_model_from_data_tables"])
+    @pytest.fixture(params=["nat_model", "nat_model_from_data_sources"])
     def example_tester(self, request):
         def _example_tester(solver="cbc", solver_io=None):
             model = request.getfixturevalue(request.param)
 
             solve_kwargs = {"solver": solver}
-            solve_kwargs["solver_io"] = solver_io
+            if solver_io:
+                solve_kwargs["solver_io"] = solver_io
 
             model.solve(force=True, **solve_kwargs)
 
@@ -130,7 +131,7 @@ class TestNationalScaleExampleModelSenseChecks:
             pytest.skip("GLPK not installed")
 
     def test_fails_gracefully_without_timeseries(self):
-        override = {"data_tables": {"_REPLACE_": {}}}
+        override = {"data_sources": {"_REPLACE_": {}}}
         with pytest.raises(calliope.exceptions.ModelError) as excinfo:
             calliope.examples.national_scale(override_dict=override)
 
@@ -396,10 +397,10 @@ class TestNationalScaleResampledExampleModelSenseChecks:
 
 class TestUrbanScaleExampleModelSenseChecks:
     def example_tester(self, source_unit, solver="cbc", solver_io=None):
-        data_tables = f"data_tables.pv_resource.select.scaler: {source_unit}"
+        data_sources = f"data_sources.pv_resource.select.scaler: {source_unit}"
         unit_override = {
             "techs.pv.source_unit": source_unit,
-            **read_rich_yaml(data_tables),
+            **calliope.AttrDict.from_yaml_string(data_sources),
         }
 
         model = calliope.examples.urban_scale(
@@ -479,7 +480,6 @@ class TestUrbanScaleExampleModelSenseChecks:
 
         assert float(model.results.cost.sum()) == approx(540.780779)
 
-    @pytest.mark.time_intensive
     def test_operate_example_results(self):
         model = calliope.examples.operate(time_subset=["2005-07-01", "2005-07-04"])
 

@@ -10,8 +10,6 @@ import pandas as pd
 import pytest
 
 import calliope
-from calliope.io import read_rich_yaml
-from calliope.schemas.math_schema import CalliopeMathDef
 from calliope.util import schema
 from calliope.util.generate_runs import generate_runs
 from calliope.util.logging import log_time
@@ -185,16 +183,21 @@ class TestValidateDict:
 
     @pytest.fixture
     def base_math(self):
-        return read_rich_yaml(Path(calliope.__file__).parent / "math" / "plan.yaml")
+        return calliope.AttrDict.from_yaml(
+            Path(calliope.__file__).parent / "math" / "base.yaml"
+        )
 
     @pytest.mark.parametrize(
         "dict_path", glob.glob(str(Path(calliope.__file__).parent / "math" / "*.yaml"))
     )
     def test_validate_math(self, base_math, dict_path):
-        base_math.union(
-            read_rich_yaml(dict_path, allow_override=True), allow_override=True
+        math_schema = calliope.AttrDict.from_yaml(
+            Path(calliope.__file__).parent / "config" / "math_schema.yaml"
         )
-        CalliopeMathDef(**base_math)
+        to_validate = base_math.union(
+            calliope.AttrDict.from_yaml(dict_path), allow_override=True
+        )
+        schema.validate_dict(to_validate, math_schema, "")
 
 
 class TestExtractFromSchema:
@@ -242,7 +245,7 @@ class TestExtractFromSchema:
                     default: false
                     description: operate use cap results.
         """
-        return read_rich_yaml(schema_string)
+        return calliope.AttrDict.from_yaml_string(schema_string)
 
     @pytest.fixture(scope="class")
     def sample_model_def_schema(self):
@@ -316,7 +319,7 @@ class TestExtractFromSchema:
                 title: Foobar.
                 description: foobar.
         """
-        return read_rich_yaml(schema_string)
+        return calliope.AttrDict.from_yaml_string(schema_string)
 
     @pytest.fixture
     def expected_config_defaults(self):

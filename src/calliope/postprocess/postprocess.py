@@ -11,7 +11,7 @@ LOGGER = logging.getLogger(__name__)
 
 
 def postprocess_model_results(
-    results: xr.Dataset, model_data: xr.Dataset, zero_threshold: float
+    results: xr.Dataset, model_data: xr.Dataset
 ) -> xr.Dataset:
     """Post-processing of model results.
 
@@ -22,11 +22,11 @@ def postprocess_model_results(
     Args:
         results (xarray.Dataset): Output from the solver backend.
         model_data (xarray.Dataset): Calliope model data.
-        zero_threshold (float): Numbers below this value will be assumed to be zero
 
     Returns:
         xarray.Dataset: input-results dataset.
     """
+    zero_threshold = model_data.config.solve.zero_threshold
     results["capacity_factor"] = capacity_factor(results, model_data)
     results["systemwide_capacity_factor"] = capacity_factor(
         results, model_data, systemwide=True
@@ -119,7 +119,7 @@ def systemwide_levelised_cost(
     if total:
         # cost is the total cost of the system
         # flow_out is only the flow_out of supply and conversion technologies
-        allowed_techs = ("supply", "conversion")
+        allowed_techs = ("supply", "supply_plus", "conversion", "conversion_plus")
         valid_techs = model_data.base_tech.isin(allowed_techs)
         cost = cost.sum(dim="techs", min_count=1)
         flow_out = flow_out.sel(techs=valid_techs).sum(dim="techs", min_count=1)
@@ -155,7 +155,7 @@ def clean_results(results, zero_threshold):
         comment = "Postprocessing: All values < {} set to 0 in {}".format(
             zero_threshold, ", ".join(threshold_applied)
         )
-        LOGGER.warning(comment)
+        LOGGER.warn(comment)
     else:
         comment = f"Postprocessing: zero threshold of {zero_threshold} not required"
         LOGGER.info(comment)

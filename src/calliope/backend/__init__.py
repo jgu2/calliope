@@ -5,28 +5,24 @@ from typing import TYPE_CHECKING
 import xarray as xr
 
 from calliope.backend.gurobi_backend_model import GurobiBackendModel
-from calliope.backend.latex_backend_model import (
-    ALLOWED_MATH_FILE_FORMATS,
-    LatexBackendModel,
-)
+from calliope.backend.latex_backend_model import MathDocumentation
+from calliope.backend.parsing import ParsedBackendComponent
 from calliope.backend.pyomo_backend_model import PyomoBackendModel
 from calliope.exceptions import BackendError
-from calliope.preprocess import CalliopeMath
+
+MODEL_BACKENDS = ("pyomo",)
 
 if TYPE_CHECKING:
     from calliope.backend.backend_model import BackendModel
-    from calliope.schemas import config_schema
 
 
-def get_model_backend(
-    build_config: "config_schema.Build", data: xr.Dataset, math: CalliopeMath
-) -> "BackendModel":
+def get_model_backend(name: str, data: xr.Dataset, **kwargs) -> "BackendModel":
     """Assign a backend using the given configuration.
 
     Args:
-        build_config: Build configuration options.
+        name (str): name of the backend to use.
         data (Dataset): model data for the backend.
-        math (CalliopeMath): Calliope math.
+        **kwargs: backend keyword arguments corresponding to model.config.build.
 
     Raises:
         exceptions.BackendError: If invalid backend was requested.
@@ -34,10 +30,10 @@ def get_model_backend(
     Returns:
         BackendModel: Initialized backend object.
     """
-    match build_config.backend:
+    match name:
         case "pyomo":
-            return PyomoBackendModel(data, math, build_config)
+            return PyomoBackendModel(data, **kwargs)
         case "gurobi":
-            return GurobiBackendModel(data, math, build_config)
+            return GurobiBackendModel(data, **kwargs)
         case _:
-            raise BackendError(f"Incorrect backend '{build_config.backend}' requested.")
+            raise BackendError(f"Incorrect backend '{name}' requested.")

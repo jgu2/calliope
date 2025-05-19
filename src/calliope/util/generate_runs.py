@@ -11,7 +11,7 @@ import os
 
 import pandas as pd
 
-from calliope.io import read_rich_yaml
+from calliope.attrdict import AttrDict
 
 
 def generate_runs(model_file, scenarios=None, additional_args=None, override_dict=None):
@@ -29,9 +29,9 @@ def generate_runs(model_file, scenarios=None, additional_args=None, override_dic
 
     """
     if scenarios is None:
-        config = read_rich_yaml(model_file)
+        config = AttrDict.from_yaml(model_file)
         if override_dict:
-            override = read_rich_yaml(override_dict)
+            override = AttrDict.from_yaml_string(override_dict)
             config.union(override, allow_override=True, allow_replacement=True)
 
         if "scenarios" in config:

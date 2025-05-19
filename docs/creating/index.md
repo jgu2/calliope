@@ -1,22 +1,25 @@
 # Creating a model
 
-A Calliope model is a collection of interconnected technologies, nodes and carriers describing a real world system of flows.
-Usually, we consider those to be _energy_ flows, and most of what you will read in this documentation concerns energy systems.
-However, it is just as applicable to other types of flows, such as water!
+In short, a Calliope model works like this: **supply technologies** can take a **source** from outside of the modeled system and turn it into a specific **carrier** in the system.
+The model specifies one or more **nodes** along with the technologies allowed at those nodes.
+**Transmission technologies** can move the same carrier from one node to another, while **conversion technologies** can convert one carrier into another at the same node.
+**Demand technologies** remove carriers from the system through a **sink**, while **storage technologies** can store carriers at a specific node.
+Putting all of these possibilities together allows a modeller to specify as simple or as complex a model as necessary to answer a given research question.
 
-**Carriers** are commodities whose flows we track, e.g., electricity, heat, hydrogen, water, CO<sub>2</sub>.
+??? info "An overview of the Calliope terminology"
+    The terminology defined here is used throughout the documentation and the model code and configuration files:
 
-**Technologies** supply, consume, convert, store or transmit _carriers_, e.g., transmission lines/pipes, batteries, power plants, wind turbines, or home appliances.
+    * **Technology**: a technology that produces, consumes, converts or transports carriers.
+    * **Node**: a site which can contain multiple technologies and which may contain other nodes for carrier balancing purposes.
+    * **Source**: a source of commodity that can (or must) be used by a technology to introduce carriers into the system.
+    * **Sink**: a commodity sink that can (or must) be used by a technology to remove carriers from the system.
+    * **Carrier**: a carrier that groups technologies together into the same network, for example `electricity` or `heat`.
 
-**Nodes** contain groups of _technologies_ and are usually geographic, e.g., a country, municipality or a single house.
+    As more generally in constrained optimisation, the following terms are also used:
 
-Flows can enter the system from **sources**, e.g., energy from the sun to power a solar panel, and can exit it into **sinks**, e.g., electricity consumed by household appliances.
-Unlike _carriers_, we do not explicitly track the type of commodity described by sources and sinks.
-
-Putting all of these possibilities together allows a modeller to create a model that is as simple or complex as necessary to answer a given research question.
-Calliope's syntax ensures these models are intuitive, and easy to understand and share.
-
-![Visual description of the Calliope terminology.](../img/description_of_system.svg)
+    * Parameter: a fixed coefficient that enters into model equations.
+    * Variable: a variable coefficient (decision variable) that enters into model equations.
+    * Constraint: an equality or inequality expression that constrains one or several variables.
 
 !!! example
     Refer to the [examples and tutorials section](../examples/index.md) for a more practical look at how to build a Calliope model.
@@ -32,7 +35,7 @@ We distinguish between:
 - the model **definition** (your representation of a physical system in YAML).
 
 Model configuration is everything under the top-level YAML key [`config`](config.md).
-Model definition is everything else, under the top-level YAML keys [`parameters`](parameters.md), [`techs`](techs.md), [`nodes`](nodes.md), and [`data_tables`](data_tables.md).
+Model definition is everything else, under the top-level YAML keys [`parameters`](parameters.md), [`techs`](techs.md), [`nodes`](nodes.md), [`templates`](templates.md), and [`data_sources`](data_sources.md).
 
 It is possible to define alternatives to the model configuration/definition that you can refer to when you initialise your model.
 These are defined under the top-level YAML keys [`scenarios` and `overrides`](scenarios.md).
@@ -49,7 +52,7 @@ The layout of that directory typically looks roughly like this (`+` denotes dire
     + model_definition
         - nodes.yaml
         - techs.yaml
-    + data_tables
+    + data_sources
         - solar_resource.csv
         - electricity_demand.csv
     - model.yaml
@@ -60,7 +63,7 @@ In the above example, the files `model.yaml`, `nodes.yaml` and `techs.yaml` toge
 This definition could be in one file, but it is more readable when split into multiple.
 We use the above layout in the example models.
 
-Inside the `data_tables` directory, tabular data are stored as CSV files.
+Inside the `data_sources` directory, tabular data are stored as CSV files.
 
 !!! note
     The easiest way to create a new model is to use the `calliope new` command, which makes a copy of one of the built-in examples models:
@@ -81,4 +84,5 @@ The rest of this section discusses everything you need to know to set up a model
 - An overview of [YAML as it is used in Calliope](yaml.md) - though this comes first here, you can also safely skip it and refer back to it as a reference as questions arise when you go through the model configuration and definition examples.
 - More details on the [model configuration](config.md).
 - The key parts of the model definition, first, the [technologies](techs.md), then, the [nodes](nodes.md), the locations in space where technologies can be placed.
-- Other important features to be aware of when defining your model: defining [indexed parameters](parameters.md), i.e. parameter which are not indexed over technologies and nodes, [loading tabular data](data_tables.md), and defining [scenarios and overrides](scenarios.md).
+- How to use [technology and node templates](templates.md) to reduce repetition in the model definition.
+- Other important features to be aware of when defining your model: defining [indexed parameters](parameters.md), i.e. parameter which are not indexed over technologies and nodes, [loading tabular data](data_sources.md), and defining [scenarios and overrides](scenarios.md).

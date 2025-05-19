@@ -16,7 +16,11 @@ nodes:
   # --8<-- [start:other-locs]
   X2:
     techs:
-      boiler.cost_flow_cap.data: 43.1 # different boiler costs
+      boiler:
+        cost_flow_cap:
+          data: 43.1 # different boiler costs
+          index: [[monetary, heat]]
+          dims: [costs, carriers]
       pv:
         cost_flow_out:
           data: -0.0203 # revenue for just producing electricity
@@ -35,7 +39,11 @@ nodes:
 
   X3:
     techs:
-      boiler.cost_flow_cap.data: 78 # different boiler costs
+      boiler:
+        cost_flow_cap:
+          data: 78 # different boiler costs
+          index: [[monetary, heat]]
+          dims: [costs, carriers]
       pv:
         flow_cap_max: 50 # changing tariff structure below 50kW
         cost_om_annual:

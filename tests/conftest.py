@@ -7,9 +7,7 @@ import xarray as xr
 
 from calliope.attrdict import AttrDict
 from calliope.backend import latex_backend_model, pyomo_backend_model
-from calliope.preprocess import CalliopeMath
-from calliope.schemas import config_schema
-from calliope.util.schema import MODEL_SCHEMA, extract_from_schema
+from calliope.util.schema import CONFIG_SCHEMA, MODEL_SCHEMA, extract_from_schema
 
 from .common.util import build_test_model as build_model
 
@@ -33,8 +31,8 @@ def foreach(request):
 
 
 @pytest.fixture(scope="session")
-def default_config():
-    return config_schema.CalliopeConfig()
+def config_defaults():
+    return AttrDict(extract_from_schema(CONFIG_SCHEMA, "default"))
 
 
 @pytest.fixture(scope="session")
@@ -44,7 +42,7 @@ def model_defaults():
 
 @pytest.fixture(scope="session")
 def data_source_dir():
-    return Path(__file__).parent / "common" / "test_model" / "data_tables"
+    return Path(__file__).parent / "common" / "test_model" / "data_sources"
 
 
 @pytest.fixture(scope="session")
@@ -159,21 +157,7 @@ def simple_conversion_plus():
 
 
 @pytest.fixture(scope="module")
-def dummy_model_math():
-    math = {
-        "data": {
-            "constraints": {},
-            "variables": {},
-            "global_expressions": {},
-            "objectives": {},
-        },
-        "history": [],
-    }
-    return CalliopeMath.from_dict(math)
-
-
-@pytest.fixture(scope="module")
-def dummy_model_data(model_defaults):
+def dummy_model_data(config_defaults, model_defaults):
     coords = {
         dim: (
             ["foo", "bar"]
@@ -258,6 +242,10 @@ def dummy_model_data(model_defaults):
                 ["nodes", "techs"],
                 [[False, False, False, False], [False, False, False, True]],
             ),
+            "primary_carrier_out": (
+                ["carriers", "techs"],
+                [[1.0, np.nan, 1.0, np.nan], [np.nan, 1.0, np.nan, np.nan]],
+            ),
             "lookup_techs": (["techs"], ["foobar", np.nan, "foobaz", np.nan]),
             "lookup_techs_no_match": (["techs"], ["foo", np.nan, "bar", np.nan]),
             "lookup_multi_dim_nodes": (
@@ -280,6 +268,20 @@ def dummy_model_data(model_defaults):
 
     for param in model_data.data_vars.values():
         param.attrs["is_result"] = 0
+    dummy_config = AttrDict(
+        {
+            "build": {
+                "foo": True,
+                "FOO": "baz",
+                "foo1": np.inf,
+                "bar": {"foobar": "baz"},
+                "a_b": 0,
+                "b_a": [1, 2],
+            }
+        }
+    )
+    dummy_config.union(config_defaults)
+    model_data.attrs["config"] = dummy_config
 
     model_data.attrs["defaults"] = AttrDict(
         {
@@ -287,18 +289,16 @@ def dummy_model_data(model_defaults):
             "all_nan": np.nan,
             "with_inf": 100,
             "only_techs": 5,
-            "no_dims": 0,
             **model_defaults,
         }
     )
-    # This value is set on the parameter directly to ensure it finds its way through to the LaTex math.
-    model_data.no_dims.attrs["default"] = 0
-
+    model_data.attrs["math"] = AttrDict(
+        {"constraints": {}, "variables": {}, "global_expressions": {}, "objectives": {}}
+    )
     return model_data
 
 
 def populate_backend_model(backend):
-    backend._add_all_inputs_as_parameters()
     backend.add_variable(
         "multi_dim_var",
         {
@@ -331,24 +331,18 @@ def populate_backend_model(backend):
 
 
 @pytest.fixture(scope="module")
-def dummy_pyomo_backend_model(dummy_model_data, dummy_model_math, default_config):
-    backend = pyomo_backend_model.PyomoBackendModel(
-        dummy_model_data, dummy_model_math, default_config.build
-    )
+def dummy_pyomo_backend_model(dummy_model_data):
+    backend = pyomo_backend_model.PyomoBackendModel(dummy_model_data)
     return populate_backend_model(backend)
 
 
 @pytest.fixture(scope="module")
-def dummy_latex_backend_model(dummy_model_data, dummy_model_math, default_config):
-    backend = latex_backend_model.LatexBackendModel(
-        dummy_model_data, dummy_model_math, default_config.build
-    )
+def dummy_latex_backend_model(dummy_model_data):
+    backend = latex_backend_model.LatexBackendModel(dummy_model_data)
     return populate_backend_model(backend)
 
 
 @pytest.fixture(scope="class")
-def valid_latex_backend(dummy_model_data, dummy_model_math, default_config):
-    backend = latex_backend_model.LatexBackendModel(
-        dummy_model_data, dummy_model_math, default_config.build, include="valid"
-    )
+def valid_latex_backend(dummy_model_data):
+    backend = latex_backend_model.LatexBackendModel(dummy_model_data, include="valid")
     return populate_backend_model(backend)

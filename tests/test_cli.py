@@ -1,5 +1,4 @@
 import os
-import subprocess
 import tempfile
 from pathlib import Path
 
@@ -8,7 +7,7 @@ import pytest  # noqa: F401
 from click.testing import CliRunner
 
 import calliope
-from calliope import cli, io
+from calliope import AttrDict, cli
 
 _MODEL_NATIONAL = (
     importlib_resources.files("calliope")
@@ -196,17 +195,14 @@ class TestCLI:
             assert os.path.isfile(os.path.join(tempdir, "test.sh.array.sh"))
 
     def test_debug(self):
-        """Trackeback should only be printed in debug mode."""
-        # FIXME: revert back to CliRunner when error handling is made consistent with terminal output
-        # See https://github.com/pallets/click/issues/2682
-        shell_cmd = "calliope run foo.yaml"
-        result = subprocess.run(shell_cmd, shell=True, capture_output=True)
-        assert result.returncode == 1
-        assert not result.stderr
+        runner = CliRunner()
+        result = runner.invoke(cli.run, ["foo.yaml", "--debug"])
+        assert result.exit_code == 1
+        assert "Traceback (most recent call last)" in result.output
 
-        result = subprocess.run(shell_cmd + " --debug", shell=True, capture_output=True)
-        assert result.returncode == 1
-        assert "Traceback (most recent call last)" in result.stderr.decode()
+        result = runner.invoke(cli.run, ["foo.yaml"])
+        assert result.exit_code == 1
+        assert "Traceback (most recent call last)" not in result.output
 
     def test_generate_scenarios(self):
         runner = CliRunner()
@@ -224,7 +220,7 @@ class TestCLI:
             )
             assert result.exit_code == 0
             assert os.path.isfile(out_file)
-            scenarios = io.read_rich_yaml(out_file)
+            scenarios = AttrDict.from_yaml(out_file)
             assert "scenario_0" not in scenarios["scenarios"]
             assert scenarios["scenarios"]["scenario_1"] == [
                 "cold_fusion",

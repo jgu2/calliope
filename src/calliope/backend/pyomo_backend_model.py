@@ -18,7 +18,6 @@ import pyomo.environ as pe  # type: ignore
 import pyomo.kernel as pmo  # type: ignore
 import xarray as xr
 from pyomo.common.tempfiles import TempfileManager  # type: ignore
-from pyomo.core import PyomoObject
 from pyomo.core.kernel.piecewise_library.transforms import (
     PiecewiseLinearFunction,
     PiecewiseValidationError,
@@ -27,13 +26,10 @@ from pyomo.core.kernel.piecewise_library.transforms import (
 from pyomo.opt import SolverFactory  # type: ignore
 from pyomo.util.model_size import build_model_size_report  # type: ignore
 
+from calliope.backend import backend_model, parsing
 from calliope.exceptions import BackendError, BackendWarning
 from calliope.exceptions import warn as model_warn
-from calliope.preprocess import CalliopeMath
-from calliope.schemas import config_schema
 from calliope.util.logging import LogWriter
-
-from . import backend_model, parsing
 
 T = TypeVar("T")
 _COMPONENTS_T = Literal[
@@ -60,17 +56,14 @@ COMPONENT_TRANSLATOR = {
 class PyomoBackendModel(backend_model.BackendModel):
     """Pyomo-specific backend functionality."""
 
-    def __init__(
-        self, inputs: xr.Dataset, math: CalliopeMath, build_config: config_schema.Build
-    ) -> None:
+    def __init__(self, inputs: xr.Dataset, **kwargs) -> None:
         """Pyomo solver interface class.
 
         Args:
             inputs (xr.Dataset): Calliope model data.
-            math (CalliopeMath): Calliope math.
-            build_config: Build configuration options.
+            **kwargs: passed directly to the solver.
         """
-        super().__init__(inputs, math, build_config, pmo.block())
+        super().__init__(inputs, pmo.block(), **kwargs)
 
         self._instance.parameters = pmo.parameter_dict()
         self._instance.variables = pmo.variable_dict()
@@ -81,6 +74,8 @@ class PyomoBackendModel(backend_model.BackendModel):
 
         self._instance.dual = pmo.suffix(direction=pmo.suffix.IMPORT)
         self.shadow_prices = PyomoShadowPrices(self._instance.dual, self)
+
+        self._add_all_inputs_as_parameters()
 
     def add_parameter(  # noqa: D102, override
         self, parameter_name: str, parameter_values: xr.DataArray, default: Any = np.nan
@@ -189,10 +184,9 @@ class PyomoBackendModel(backend_model.BackendModel):
         ) -> xr.DataArray:
             expr = element.evaluate_expression(self, references=references)
             objective = pmo.objective(expr.item(), sense=sense)
-            if name == self.config.objective:
+            if name == self.inputs.attrs["config"].build.objective:
                 text = "activated"
                 objective.activate()
-                self.objective = name
             else:
                 text = "deactivated"
                 objective.deactivate()
@@ -202,14 +196,6 @@ class PyomoBackendModel(backend_model.BackendModel):
             return xr.DataArray(objective)
 
         self._add_component(name, objective_dict, _objective_setter, "objectives")
-
-    def set_objective(self, name: str) -> None:  # noqa: D102, override
-        self.objectives[self.objective].item().deactivate()
-        self.log("objectives", self.objective, "Objective deactivated.", level="info")
-
-        self.objectives[name].item().activate()
-        self.objective = name
-        self.log("objectives", name, "Objective activated.", level="info")
 
     def get_parameter(  # noqa: D102, override
         self, name: str, as_backend_objs: bool = True
@@ -283,30 +269,36 @@ class PyomoBackendModel(backend_model.BackendModel):
         return global_expression
 
     def _solve(  # noqa: D102, override
-        self, solve_config: config_schema.Solve, warmstart: bool = False
+        self,
+        solver: str,
+        solver_io: str | None = None,
+        solver_options: dict | None = None,
+        save_logs: str | None = None,
+        warmstart: bool = False,
+        **solve_config,
     ) -> xr.Dataset:
-        if solve_config.solver == "cbc" and self.shadow_prices.is_active:
+        if solver == "cbc" and self.shadow_prices.is_active:
             model_warn(
                 "Switching off shadow price tracker as constraint duals cannot be accessed from the CBC solver"
             )
             self.shadow_prices.deactivate()
-        opt = SolverFactory(solve_config.solver, solver_io=solve_config.solver_io)
+        opt = SolverFactory(solver, solver_io=solver_io)
 
-        if solve_config.solver_options:
-            for k, v in solve_config.solver_options.items():
+        if solver_options:
+            for k, v in solver_options.items():
                 opt.options[k] = v
 
         solve_kwargs = {}
-        if solve_config.save_logs is not None:
+        if save_logs is not None:
             solve_kwargs.update({"symbolic_solver_labels": True, "keepfiles": True})
-            logdir = Path(solve_config.save_logs)
+            logdir = Path(save_logs)
             logdir.mkdir(parents=True, exist_ok=True)
             TempfileManager.tempdir = logdir  # Sets log output dir
 
-        if warmstart and solve_config.solver in ["glpk", "cbc"]:
+        if warmstart and solver in ["glpk", "cbc"]:
             model_warn(
-                f"The chosen solver, {solve_config.solver}, does not support warmstart, "
-                "which may impact performance."
+                f"The chosen solver, {solver}, does not support warmstart, which may "
+                "impact performance."
             )
             warmstart = False
 
@@ -338,7 +330,7 @@ class PyomoBackendModel(backend_model.BackendModel):
 
     def verbose_strings(self) -> None:  # noqa: D102, override
         def __renamer(val, *idx):
-            if pd.notna(val):
+            if pd.notnull(val):
                 val.calliope_coords = idx
 
         with self._datetime_as_string(self._dataset):
@@ -443,7 +435,7 @@ class PyomoBackendModel(backend_model.BackendModel):
         else:
             self._apply_func(
                 self._update_pyomo_param,
-                new_values.notnull(),
+                parameter_da.notnull(),
                 1,
                 parameter_da,
                 new_values,
@@ -468,7 +460,7 @@ class PyomoBackendModel(backend_model.BackendModel):
                 )
                 continue
 
-            existing_bound_param = self.math.data.get_key(
+            existing_bound_param = self.inputs.attrs["math"].get_key(
                 f"variables.{name}.bounds.{bound_name}", None
             )
             if existing_bound_param in self.parameters:
@@ -689,10 +681,7 @@ class PyomoBackendModel(backend_model.BackendModel):
         if eval_body:
             try:
                 expr = self._apply_func(
-                    lambda expr: expr() if isinstance(expr, PyomoObject) else expr,
-                    expr_da.notnull(),
-                    1,
-                    expr_da,
+                    lambda expr: expr(), expr_da.notnull(), 1, expr_da
                 )
             except ValueError:
                 expr = expr_da.astype(str)

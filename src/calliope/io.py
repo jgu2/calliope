@@ -1,12 +1,8 @@
 # Copyright (C) since 2013 Calliope contributors listed in AUTHORS.
 # Licensed under the Apache 2.0 License (see LICENSE file).
-"""Functions to read and save model results and configuration."""
+"""Functions to read and save model results."""
 
 import importlib.resources
-import logging
-import os
-from copy import deepcopy
-from io import StringIO
 from pathlib import Path
 
 # We import netCDF4 before xarray to mitigate a numpy warning:
@@ -14,18 +10,13 @@ from pathlib import Path
 import netCDF4  # noqa: F401
 import numpy as np
 import pandas as pd
-import ruamel.yaml as ruamel_yaml
 import xarray as xr
 
 from calliope import exceptions
 from calliope.attrdict import AttrDict
-from calliope.util.tools import listify, relative_path
-
-logger = logging.getLogger(__name__)
+from calliope.util.tools import listify
 
 CONFIG_DIR = importlib.resources.files("calliope") / "config"
-YAML_INDENT = 2
-YAML_BLOCK_SEQUENCE_INDENT = 0
 
 
 def read_netcdf(path):
@@ -78,7 +69,7 @@ def _serialise(attrs: dict) -> None:
     dict_attrs = [k for k, v in attrs.items() if isinstance(v, dict)]
     attrs["serialised_dicts"] = dict_attrs
     for attr in dict_attrs:
-        attrs[attr] = to_yaml(attrs[attr])
+        attrs[attr] = AttrDict(attrs[attr]).to_yaml()
 
     # Convert boolean attrs to ints
     bool_attrs = [k for k, v in attrs.items() if isinstance(v, bool)]
@@ -114,7 +105,7 @@ def _serialise(attrs: dict) -> None:
 def _deserialise(attrs: dict) -> None:
     """Convert troublesome datatypes in xarray attribute dictionaries from their stored data type to the data types expected by Calliope.
 
-    This will tackle dictionaries (from string), booleans (from int), None (from string), and sets (from list).
+    This will tackle dictionaries (from string), booleans (from int), None (form string), and sets (from list).
 
     Args:
         attrs (dict):
@@ -122,7 +113,7 @@ def _deserialise(attrs: dict) -> None:
             Changes will be made in-place, so be sure to supply a copy of your dictionary if you want access to its original state.
     """
     for attr in _pop_serialised_list(attrs, "serialised_dicts"):
-        attrs[attr] = read_rich_yaml(attrs[attr])
+        attrs[attr] = AttrDict.from_yaml_string(attrs[attr])
     for attr in _pop_serialised_list(attrs, "serialised_bools"):
         attrs[attr] = bool(attrs[attr])
     for attr in _pop_serialised_list(attrs, "serialised_nones"):
@@ -133,13 +124,16 @@ def _deserialise(attrs: dict) -> None:
         attrs[attr] = set(attrs[attr])
 
 
-def save_netcdf(model_data, path, **kwargs):
+def save_netcdf(model_data, path, model=None):
     """Save the model to a netCDF file."""
-    original_model_data_attrs = deepcopy(model_data.attrs)
-    for key, value in kwargs.items():
-        model_data.attrs[key] = value
+    original_model_data_attrs = model_data.attrs
+    model_data_attrs = original_model_data_attrs.copy()
 
-    _serialise(model_data.attrs)
+    if model is not None and hasattr(model, "_model_def_dict"):
+        # Attach initial model definition to _model_data
+        model_data_attrs["_model_def_dict"] = model._model_def_dict.to_yaml()
+
+    _serialise(model_data_attrs)
     for var in model_data.data_vars.values():
         _serialise(var.attrs)
 
@@ -153,6 +147,7 @@ def save_netcdf(model_data, path, **kwargs):
     }
 
     try:
+        model_data.attrs = model_data_attrs
         model_data.to_netcdf(path, format="netCDF4", encoding=encoding)
         model_data.close()  # Force-close NetCDF file after writing
     finally:  # Revert model_data.attrs back
@@ -216,106 +211,5 @@ def save_csv(
 def load_config(filename: str):
     """Load model configuration from a file."""
     with importlib.resources.as_file(CONFIG_DIR / filename) as f:
-        loaded = read_rich_yaml(f)
+        loaded = AttrDict.from_yaml(f)
     return loaded
-
-
-def read_rich_yaml(yaml: str | Path, allow_override: bool = False) -> AttrDict:
-    """Returns an AttrDict initialised from the given YAML file or string.
-
-    Uses calliope's "flavour" for YAML files.
-
-    Args:
-        yaml (str | Path): YAML file path or string.
-        allow_override (bool, optional): Allow overrides for already defined keys. Defaults to False.
-
-    Raises:
-        ValueError: Import solving requested for non-file input YAML.
-    """
-    if isinstance(yaml, str) and not os.path.exists(yaml):
-        yaml_path = None
-        yaml_text = yaml
-    else:
-        yaml_path = Path(yaml)
-        yaml_text = yaml_path.read_text(encoding="utf-8")
-
-    yaml_dict = AttrDict(_yaml_load(yaml_text))
-    yaml_dict = _resolve_yaml_imports(
-        yaml_dict, base_path=yaml_path, allow_override=allow_override
-    )
-    return yaml_dict
-
-
-def _yaml_load(src: str):
-    """Load YAML from a file object or path with useful parser errors."""
-    yaml = ruamel_yaml.YAML(typ="safe")
-    src_name = "<yaml string>"
-    try:
-        result = yaml.load(src)
-        if not isinstance(result, dict):
-            raise ValueError(f"Could not parse {src_name} as YAML")
-        return result
-    except ruamel_yaml.YAMLError:
-        logger.error(f"Parser error when reading YAML from {src_name}.")
-        raise
-
-
-def _resolve_yaml_imports(
-    loaded: AttrDict, base_path: str | Path | None, allow_override: bool
-) -> AttrDict:
-    loaded_dict = loaded
-    imports = loaded_dict.get_key("import", None)
-    if imports:
-        if not isinstance(imports, list):
-            raise ValueError("`import` must be a list.")
-        if base_path is None:
-            raise ValueError("Imports are not possible for non-file yaml inputs.")
-
-        for k in imports:
-            path = relative_path(base_path, k)
-            imported = read_rich_yaml(path)
-            # loaded is added to imported (i.e. it takes precedence)
-            imported.union(loaded_dict, allow_override=allow_override)
-            loaded_dict = imported
-        # 'import' key itself is no longer needed
-        loaded_dict.del_key("import")
-
-    return loaded_dict
-
-
-def to_yaml(data: AttrDict | dict, path: None | str | Path = None) -> str:
-    """Conversion to YAML.
-
-    Saves the AttrDict to the ``path`` as a YAML file or returns a YAML string
-    if ``path`` is None.
-    """
-    result = AttrDict(data).copy()
-    # Prepare YAML parsing settings
-    yaml_ = ruamel_yaml.YAML()
-    yaml_.indent = YAML_INDENT
-    yaml_.block_seq_indent = YAML_BLOCK_SEQUENCE_INDENT
-    # Keep dictionary order
-    yaml_.sort_base_mapping_type_on_output = False  # type: ignore[assignment]
-
-    # Numpy objects should be converted to regular Python objects,
-    # so that they are properly displayed in the resulting YAML output
-    for k in result.keys_nested():
-        # Convert numpy numbers to regular python ones
-        v = result.get_key(k)
-        if isinstance(v, np.floating):
-            result.set_key(k, float(v))
-        elif isinstance(v, np.integer):
-            result.set_key(k, int(v))
-        # Lists are turned into seqs so that they are formatted nicely
-        elif isinstance(v, list):
-            result.set_key(k, yaml_.seq(v))
-
-    result = result.as_dict()
-
-    if path is not None:
-        with open(path, "w") as f:
-            yaml_.dump(result, f)
-
-    stream = StringIO()
-    yaml_.dump(result, stream)
-    return stream.getvalue()

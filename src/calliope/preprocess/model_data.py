@@ -5,7 +5,6 @@
 import itertools
 import logging
 from copy import deepcopy
-from pathlib import Path
 from typing import Literal
 
 import numpy as np
@@ -16,10 +15,9 @@ from typing_extensions import NotRequired, TypedDict
 
 from calliope import exceptions
 from calliope.attrdict import AttrDict
-from calliope.preprocess import data_tables, time
-from calliope.schemas.config_schema import Init
+from calliope.preprocess import data_sources, time
 from calliope.util.schema import MODEL_SCHEMA, validate_dict
-from calliope.util.tools import listify, relative_path
+from calliope.util.tools import listify
 
 LOGGER = logging.getLogger(__name__)
 
@@ -72,10 +70,9 @@ class ModelDataFactory:
 
     def __init__(
         self,
-        init_config: Init,
-        model_definition: AttrDict,
-        definition_path: str | Path | None,
-        data_table_dfs: dict[str, pd.DataFrame] | None,
+        model_config: dict,
+        model_definition: ModelDefinition,
+        data_sources: list[data_sources.DataSource],
         attributes: dict,
         param_attributes: dict[str, dict],
     ):
@@ -84,28 +81,17 @@ class ModelDataFactory:
         This includes resampling/clustering timeseries data as necessary.
 
         Args:
-            init_config (Init): Model initialisation configuration (i.e., `config.init`).
+            model_config (dict): Model initialisation configuration (i.e., `config.init`).
             model_definition (ModelDefinition): Definition of model nodes and technologies, and their potential `templates`.
-            definition_path (Path, None): Path to the main model definition file. Defaults to None.
-            data_table_dfs: (dict[str, pd.DataFrame], None): Dataframes with model data. Defaults to None.
+            data_sources (list[data_sources.DataSource]): Pre-loaded data sources that will be used to initialise the dataset before handling definitions given in `model_definition`.
             attributes (dict): Attributes to attach to the model Dataset.
             param_attributes (dict[str, dict]): Attributes to attach to the generated model DataArrays.
         """
-        self.config: Init = init_config
+        self.config: dict = model_config
         self.model_definition: ModelDefinition = model_definition.copy()
         self.dataset = xr.Dataset(attrs=AttrDict(attributes))
-        self.tech_data_from_tables = AttrDict()
-        self.definition_path: str | Path | None = definition_path
-        tables = []
-        for table_name, table_dict in model_definition.get_key(
-            "data_tables", {}
-        ).items():
-            tables.append(
-                data_tables.DataTable(
-                    table_name, table_dict, data_table_dfs, self.definition_path
-                )
-            )
-        self.init_from_data_tables(tables)
+        self.tech_data_from_sources = AttrDict()
+        self.init_from_data_sources(data_sources)
 
         flipped_attributes: dict[str, dict] = dict()
         for key, val in param_attributes.items():
@@ -124,45 +110,46 @@ class ModelDataFactory:
         self.update_time_dimension_and_params()
         self.assign_input_attr()
 
-    def init_from_data_tables(self, data_tables: list[data_tables.DataTable]):
+    def init_from_data_sources(self, data_sources: list[data_sources.DataSource]):
         """Initialise the model definition and dataset using data loaded from file / in-memory objects.
 
-        A basic skeleton of the dictionary format model definition is created from the data tables,
+        A basic skeleton of the dictionary format model definition is created from the data sources,
         namely technology and technology-at-node lists (without parameter definitions).
 
         Args:
-            data_tables (list[data_tables.DataTable]): Pre-loaded data tables.
+            data_sources (list[data_sources.DataSource]): Pre-loaded data sources.
         """
-        for data_table in data_tables:
-            tech_dict, base_tech_data = data_table.tech_dict()
+        for data_source in data_sources:
+            tech_dict, base_tech_data = data_source.tech_dict()
             tech_dict.union(
                 self.model_definition.get("techs", AttrDict()), allow_override=True
             )
             self.model_definition["techs"] = tech_dict
-            self.tech_data_from_tables.union(base_tech_data)
+            self.tech_data_from_sources.union(base_tech_data)
 
         techs_incl_inheritance = self._inherit_defs("techs")
-        for data_table in data_tables:
-            node_dict = data_table.node_dict(techs_incl_inheritance)
+        for data_source in data_sources:
+            node_dict = data_source.node_dict(techs_incl_inheritance)
             node_dict.union(
                 self.model_definition.get("nodes", AttrDict()), allow_override=True
             )
             self.model_definition["nodes"] = node_dict
             for param, lookup_dim in self.LOOKUP_PARAMS.items():
-                lookup_dict = data_table.lookup_dict_from_param(param, lookup_dim)
-                self.tech_data_from_tables.union(lookup_dict)
+                lookup_dict = data_source.lookup_dict_from_param(param, lookup_dim)
+                self.tech_data_from_sources.union(lookup_dict)
                 if lookup_dict:
-                    data_table.drop(param)
+                    data_source.drop(param)
 
-        for data_table in data_tables:
+        for data_source in data_sources:
             self._add_to_dataset(
-                data_table.dataset, f"(data_tables, {data_table.name})"
+                data_source.dataset, f"(data_sources, {data_source.name})"
             )
 
     def add_node_tech_data(self):
         """For each node, extract technology definitions and node-level parameters and convert them to arrays.
 
-        The node definition will be updated with each defined tech (which will also be updated according to its inheritance tree).
+        The node definition will first be updated according to any defined inheritance (via `template`),
+        before processing each defined tech (which will also be updated according to its inheritance tree).
 
         Node and tech definitions will be validated against the model definition schema here.
         """
@@ -232,7 +219,7 @@ class ModelDataFactory:
             if name in self.dataset.data_vars:
                 exceptions.warn(
                     f"(parameters, {name}) | "
-                    "A parameter with this name has already been defined in a data table or at a node/tech level. "
+                    "A parameter with this name has already been defined in a data source or at a node/tech level. "
                     f"Non-NaN data defined here will override existing data for this parameter."
                 )
             param_dict = self._prepare_param_dict(name, data)
@@ -257,7 +244,7 @@ class ModelDataFactory:
             raise exceptions.ModelError(
                 "Must define at least one timeseries parameter in a Calliope model."
             )
-        time_subset = self.config.time_subset
+        time_subset = self.config.get("time_subset", None)
         if time_subset is not None:
             self.dataset = time.subset_timeseries(self.dataset, time_subset)
         self.dataset = time.add_inferred_time_params(self.dataset)
@@ -265,13 +252,11 @@ class ModelDataFactory:
         # By default, the model allows operate mode
         self.dataset.attrs["allow_operate_mode"] = 1
 
-        if self.config.time_resample is not None:
-            self.dataset = time.resample(self.dataset, self.config.time_resample)
-        if self.config.time_cluster is not None:
+        if self.config["time_resample"] is not None:
+            self.dataset = time.resample(self.dataset, self.config["time_resample"])
+        if self.config["time_cluster"] is not None:
             self.dataset = time.cluster(
-                self.dataset,
-                relative_path(self.definition_path, self.config.time_cluster),
-                self.config.time_format,
+                self.dataset, self.config["time_cluster"], self.config["time_format"]
             )
 
     def clean_data_from_undefined_members(self):
@@ -339,7 +324,7 @@ class ModelDataFactory:
                     self.dataset.longitude.sel(nodes=node2).item(),
                 )["s12"]
             distance_array = pd.Series(distances).rename_axis(index="techs").to_xarray()
-            if self.config.distance_unit == "km":
+            if self.config["distance_unit"] == "km":
                 distance_array /= 1000
         else:
             LOGGER.debug(
@@ -501,13 +486,6 @@ class ModelDataFactory:
             data = param_data["data"]
             index_items = [listify(idx) for idx in listify(param_data["index"])]
             dims = listify(param_data["dims"])
-            broadcast_param_data = self.config.broadcast_param_data
-            if not broadcast_param_data and len(listify(data)) != len(index_items):
-                raise exceptions.ModelError(
-                    f"{param_name} | Length mismatch between data ({data}) and index ({index_items}) for parameter definition. "
-                    "Check lengths of arrays or set `config.init.broadcast_param_data` to True "
-                    "to allow single data entries to be broadcast across all parameter index items."
-                )
         elif param_name in self.LOOKUP_PARAMS.keys():
             data = True
             index_items = [[i] for i in listify(param_data)]
@@ -531,7 +509,7 @@ class ModelDataFactory:
     ) -> AttrDict:
         """For a set of node/tech definitions, climb the inheritance tree to build a final definition dictionary.
 
-        For `techs` at `nodes`, they inherit the technology definition from `techs`.
+        For `techs` at `nodes`, the first step is to inherit the technology definition from `techs`, _then_ to climb `template` references.
 
         Base definitions will take precedence over inherited ones and more recent inherited definitions will take precedence over older ones.
 
@@ -555,11 +533,11 @@ class ModelDataFactory:
             AttrDict: Dictionary containing all active tech/node definitions with inherited parameters.
         """
         if connected_dims:
-            debug_message_prefix = (
+            err_message_prefix = (
                 ", ".join([f"({k}, {v})" for k, v in connected_dims.items()]) + ", "
             )
         else:
-            debug_message_prefix = ""
+            err_message_prefix = ""
 
         updated_defs = AttrDict()
         if dim_dict is None:
@@ -572,28 +550,85 @@ class ModelDataFactory:
                 base_def = self.model_definition["techs"]
                 if item_name not in base_def:
                     raise KeyError(
-                        f"{debug_message_prefix}({dim_name}, {item_name}) | Reference to item not defined in base {dim_name}"
+                        f"{err_message_prefix}({dim_name}, {item_name}) | Reference to item not defined in base {dim_name}"
                     )
 
                 item_base_def = deepcopy(base_def[item_name])
                 item_base_def.union(item_def, allow_override=True)
-                if item_name in self.tech_data_from_tables:
-                    _data_table_dict = deepcopy(self.tech_data_from_tables[item_name])
-                    _data_table_dict.union(item_base_def, allow_override=True)
-                    item_base_def = _data_table_dict
             else:
                 item_base_def = item_def
+            updated_item_def, inheritance = self._climb_template_tree(
+                item_base_def, dim_name, item_name
+            )
 
-            if not item_base_def.get("active", True):
+            if not updated_item_def.get("active", True):
                 LOGGER.debug(
-                    f"{debug_message_prefix}({dim_name}, {item_name}) | Deactivated."
+                    f"{err_message_prefix}({dim_name}, {item_name}) | Deactivated."
                 )
                 self._deactivate_item(**{dim_name: item_name, **connected_dims})
                 continue
 
-            updated_defs[item_name] = item_base_def
+            if inheritance is not None:
+                updated_item_def[f"{dim_name}_inheritance"] = ",".join(inheritance)
+                del updated_item_def["template"]
+
+            updated_defs[item_name] = updated_item_def
 
         return updated_defs
+
+    def _climb_template_tree(
+        self,
+        dim_item_dict: AttrDict,
+        dim_name: Literal["nodes", "techs"],
+        item_name: str,
+        inheritance: list | None = None,
+    ) -> tuple[AttrDict, list | None]:
+        """Follow the `template` references from `nodes` / `techs` to `templates`.
+
+        Abstract template definitions (those in `templates`) can inherit each other, but `nodes`/`techs` cannot.
+
+        This function will be called recursively until a definition dictionary without `template` is reached.
+
+        Args:
+            dim_item_dict (AttrDict): Dictionary (possibly) containing `template`.
+            dim_name (Literal[nodes, techs]):
+                The name of the dimension we're working with, so that we can access the correct `_groups` definitions.
+            item_name (str):
+                The current position in the inheritance tree.
+            inheritance (list | None, optional):
+                A list of items that have been inherited (starting with the oldest).
+                If the first `dim_item_dict` does not contain `template`, this will remain as None.
+                Defaults to None.
+
+        Raises:
+            KeyError: Must inherit from a named template item in `templates`.
+
+        Returns:
+            tuple[AttrDict, list | None]: Definition dictionary with inherited data and a list of the inheritance tree climbed to get there.
+        """
+        to_inherit = dim_item_dict.get("template", None)
+        dim_groups = AttrDict(self.model_definition.get("templates", {}))
+        if to_inherit is None:
+            if dim_name == "techs" and item_name in self.tech_data_from_sources:
+                _data_source_dict = deepcopy(self.tech_data_from_sources[item_name])
+                _data_source_dict.union(dim_item_dict, allow_override=True)
+                dim_item_dict = _data_source_dict
+            updated_dim_item_dict = dim_item_dict
+        elif to_inherit not in dim_groups:
+            raise KeyError(
+                f"({dim_name}, {item_name}) | Cannot find `{to_inherit}` in template inheritance tree."
+            )
+        else:
+            base_def_dict, inheritance = self._climb_template_tree(
+                dim_groups[to_inherit], dim_name, to_inherit, inheritance
+            )
+            updated_dim_item_dict = deepcopy(base_def_dict)
+            updated_dim_item_dict.union(dim_item_dict, allow_override=True)
+            if inheritance is not None:
+                inheritance.append(to_inherit)
+            else:
+                inheritance = [to_inherit]
+        return updated_dim_item_dict, inheritance
 
     def _deactivate_item(self, **item_ref):
         for dim_name, item_name in item_ref.items():
@@ -608,7 +643,7 @@ class ModelDataFactory:
                 self.dataset["carrier_out"].loc[item_ref] = np.nan
 
     def _links_to_node_format(self, active_node_dict: AttrDict) -> AttrDict:
-        """Process `transmission` techs into links by assigned them to the nodes defined by their `link_from` and `link_to` keys.
+        """Process `transmission` techs into links by assigned them to the nodes defined by their `from` and `to` keys.
 
         Args:
             active_node_dict (AttrDict):
@@ -633,7 +668,7 @@ class ModelDataFactory:
             LOGGER.debug("links | No links between nodes defined.")
 
         for link_name, link_data in active_link_techs.items():
-            node_from, node_to = link_data.pop("link_from"), link_data.pop("link_to")
+            node_from, node_to = link_data.pop("from"), link_data.pop("to")
             nodes_exists = all(
                 node in active_node_dict
                 or node in self.dataset.coords.get("nodes", xr.DataArray())
@@ -642,7 +677,7 @@ class ModelDataFactory:
 
             if not nodes_exists:
                 LOGGER.debug(
-                    f"(links, {link_name}) | Deactivated due to missing/deactivated `link_from` or `link_to` node."
+                    f"(links, {link_name}) | Deactivated due to missing/deactivated `from` or `to` node."
                 )
                 self._deactivate_item(techs=link_name)
                 continue
@@ -653,10 +688,12 @@ class ModelDataFactory:
                 self._update_one_way_links(node_from_data, node_to_data)
 
             link_tech_dict.union(
-                {
-                    node_from: {link_name: node_from_data},
-                    node_to: {link_name: node_to_data},
-                }
+                AttrDict(
+                    {
+                        node_from: {link_name: node_from_data},
+                        node_to: {link_name: node_to_data},
+                    }
+                )
             )
 
         return link_tech_dict
@@ -672,7 +709,7 @@ class ModelDataFactory:
         """
         to_add_numeric_dims = self._update_numeric_dims(to_add, id_)
         to_add_numeric_ts_dims = time.timeseries_to_datetime(
-            to_add_numeric_dims, self.config.time_format, id_
+            to_add_numeric_dims, self.config["time_format"], id_
         )
         self.dataset = xr.merge(
             [to_add_numeric_ts_dims, self.dataset],
@@ -711,18 +748,16 @@ class ModelDataFactory:
         """Update functionality for one-way links.
 
         For one-way transmission links, delete option to have carrier outflow (imports)
-        at the `link_from` node and carrier inflow (exports) at the `link_to` node.
+        at the `from` node and carrier inflow (exports) at the `to` node.
 
         Deletions happen on the tech definition dictionaries in-place.
 
         Args:
-            node_from_data (dict): Link technology data dictionary at the `link_from` node.
-            node_to_data (dict): Link technology data dictionary at the `link_to` node.
+            node_from_data (dict): Link technology data dictionary at the `from` node.
+            node_to_data (dict): Link technology data dictionary at the `to` node.
         """
-        node_from_data.pop(
-            "carrier_out"
-        )  # cannot import carriers at the `link_from` node
-        node_to_data.pop("carrier_in")  # cannot export carrier at the `link_to` node
+        node_from_data.pop("carrier_out")  # cannot import carriers at the `from` node
+        node_to_data.pop("carrier_in")  # cannot export carrier at the `to` node
 
     @staticmethod
     def _update_numeric_dims(ds: xr.Dataset, id_: str) -> xr.Dataset:
@@ -753,7 +788,7 @@ class ModelDataFactory:
     def _raise_error_on_transmission_tech_def(
         self, tech_def_dict: AttrDict, node_name: str
     ):
-        """Do not allow any transmission techs to be defined in the node-level tech dict.
+        """Do not allow any transmission techs are defined in the node-level tech dict.
 
         Args:
             tech_def_dict (dict): Tech definition dict (after full inheritance) at a node.
@@ -771,5 +806,5 @@ class ModelDataFactory:
         if transmission_techs:
             raise exceptions.ModelError(
                 f"(nodes, {node_name}) | Transmission techs cannot be directly defined at nodes; "
-                f"they will be automatically assigned to nodes based on `link_to` and `link_from` parameters: {transmission_techs}"
+                f"they will be automatically assigned to nodes based on `to` and `from` parameters: {transmission_techs}"
             )

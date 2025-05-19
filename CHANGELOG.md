@@ -1,82 +1,4 @@
-## 0.7.0.dev7
-
-### Internal changes
-
-
-## 0.7.0.dev6 (2025-03-24)
-
-### User-facing changes
-
-|new| working SPORES mode, upgraded from v0.6 to include a selection of scoring algorithms (#716).
-
-|new| backend `set_objective` method, to switch between pre-defined objectives (#716).
-
-|changed| |backwards-incompatible| `from` and `to` parameters (to define start and end point of a transmission link) are now `link_from` and `link_to` (#717).
-
-|changed| |backwards-incompatible| `operate` and `spores` mode configuration options are now nested within the main configuration (e.g., `build.operate_window` is now `build.operate.window` and `solve.spores_number` is now `solve.spores.number`) (#704).
-
-|changed| coin-or-cbc is now available cross-platform on conda-forge and so is the recommended open-source solver to install a user environment with (#744).
-
-|changed| Upper bound pins for dependencies removed where possible, to minimise clashes when using calliope as a dependency in a project (#744).
-
-|changed| |backwards-incompatible| to ensure the model configuration always remains in sync with the results, `kwargs` in `model.build()` and `model.solve()` now directly affect `model.config` (#704)
-
-|changed| `template:` can now be used anywhere within YAML definition files, not just in the `nodes`, `techs` and `data_tables` sections (#719).
-
-|changed| Removed `inheritance` math helper function since we use `base_tech` for abstract base technologies and templates are now applied too early to be available later (#719).
-To refer to template inheritance, set a parameter within a template as all children will share the same value.
-
-### Internal changes
-
-|changed| Moved to using `pydantic` to document and validate our configuration, rather than JSON schema (#704, #717).
-
-|changed| As with base dependencies, moved to pinning lower bound only for development dependencies (#744).
-
-|changed| Curtailed `calliope.AttrDict` relevance, with I/O moved to `calliope.io` and attribute access moved to `pydantic` models.
-`AttrDict` is still used to merge overrides and templates into the model definition dictionary, before creating the `pydantic` models.
-
-## 0.7.0.dev5 (2024-12-04)
-
-### User-facing changes
-
-|changed| "An overview of the Calliope terminology" information admonition to remove self-references and improve understandability.
-Now also includes a visual depiction of how the different defined components connect together (#699).
-
-|fixed| Area-based parameters have appropriate documented units of `area` rather than `area^2` (#701).
-
-|fixed| Technology capacity lower bound constraints so that `[cap-type]_min` (e.g., `flow_cap_min`) is not always enforced if the `purchased_units` variable is active (#643).
-
-|changed| Single data entries defined in YAML indexed parameters will not be automatically broadcast along indexed dimensions.
-To achieve the same functionality as in `<v0.7.dev4`, the user must set the new `init` configuration option `broadcast_param_data` to True (#615).
-
-|changed| Helper functions are now documented on their own page within the "Defining your own math" section of the documentation (#698).
-
-|new| `where(array, condition)` math helper function to apply a where array _inside_ an expression, to enable extending component dimensions on-the-fly, and applying filtering to different components within the expression (#604, #679).
-
-|new| Data tables can inherit options from `templates`, like `techs` and `nodes` (#676).
-
-|new| dimension renaming functionality when loading from a data source, using the `rename_dims` option (#680).
-
-|changed| cost expressions in math, to split out investment costs into the capital cost (`cost_investment`), annualised capital cost (`cost_investment_annualised`), fixed operation costs (`cost_operation_fixed`) and variable operation costs (`cost_operation_variable`, previously `cost_var`) (#645).
-
-|new| Math has been removed from `model.math`, and can now be accessed via `model.math.data` (#639).
-
-|new| (non-NaN) Default values and data types for parameters appear in math documentation (if they appear in the model definition schema) (#677).
-
-|changed| `data_sources` -> `data_tables` and `data_sources.source` -> `data_tables.data`.
-This change has occurred to avoid confusion between data "sources" and model energy "sources" (#673).
-
-### Internal changes
-
-|changed| updated transmission technologies to/from -> link_to/link_from to avoid conflicts with protected `python` terminology.
-
-|changed| Model configuration, data tables, techs/nodes data, math and general model definition now uses `pydantic`.
-
-|changed| Model definition reading is now defined in a single place (preprocess/model_definition.py).
-
-|changed| Moved YAML reading/importing functionality out of `AttrDict`. It is now part of our `io` functionality.
-
-|fixed| Avoided gurobi 12.0 incompatibility with pyomo by setting the lower bound to v6.8.2.
+## 0.7.0.dev5 (Unreleased)
 
 ## 0.7.0.dev4 (2024-09-10)
 
@@ -133,12 +55,6 @@ Parameter titles from the model definition schema will also propagate to the mod
 * `timestamp_solve_complete`: at the end of `Model.solve()`
 
 ### Internal changes
-
-|changed| `model._model_def_dict` has been removed.
-
-|new| `CalliopeMath` is a new helper class to handle math additions, including separate methods for pre-defined math, user-defined math and validation checks.
-
-|changed| `MathDocumentation` has been extracted from `Model`/`LatexBackend`, and now is a postprocessing module which can take models as input.
 
 |new| `gurobipy` is a development dependency that will be added as an optional dependency to the conda-forge calliope feedstock recipe.
 

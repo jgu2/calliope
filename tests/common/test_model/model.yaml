@@ -15,8 +15,6 @@ config:
   init:
     name: Test model
     time_subset: ["2005-01-01", "2005-01-02"]
-    broadcast_param_data: true
-
   build:
     mode: plan
   solve:
@@ -25,9 +23,9 @@ config:
 parameters:
   bigM: 1e3
 
-data_tables:
+data_sources:
   demand_elec:
-    data: data_tables/demand_elec.csv
+    source: data_sources/demand_elec.csv
     rows: timesteps
     columns: nodes
     add_dims:
@@ -158,8 +156,8 @@ templates:
   test_controller: {}
 
   test_transmission:
-    link_from: a
-    link_to: b
+    from: a
+    to: b
     template: test_controller
 
   test_transmission_elec:

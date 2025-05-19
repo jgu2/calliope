@@ -10,11 +10,10 @@ import pstats
 import shutil
 import sys
 import traceback
-from pathlib import Path
 
 import click
 
-from calliope import Model, examples, io, read_netcdf
+from calliope import AttrDict, Model, examples, read_netcdf
 from calliope._version import __version__
 from calliope.exceptions import BackendError
 from calliope.util.generate_runs import generate
@@ -34,7 +33,7 @@ _quiet = click.option(
     "--quiet",
     is_flag=True,
     default=False,
-    help="Be less verbose about what is happening, including hiding solver output.",
+    help="Be less verbose about what is happening, including hiding " "solver output.",
 )
 
 _pdb = click.option(
@@ -111,7 +110,9 @@ def print_end_time(start_time, msg="complete"):
     end_time = datetime.datetime.now()
     secs = round((end_time - start_time).total_seconds(), 1)
     tend = end_time.strftime(_time_format)
-    click.secho(f"\nCalliope run {msg}. Elapsed: {secs} seconds (time at exit: {tend})")
+    click.secho(
+        f"\nCalliope run {msg}. " f"Elapsed: {secs} seconds (time at exit: {tend})"
+    )
 
 
 def _get_version():
@@ -125,6 +126,8 @@ def _cli_start(debug, quiet):
     """
     if debug:
         click.secho(_get_version())
+
+    if debug:
         verbosity = "debug"
         log_solver = True
     else:
@@ -192,13 +195,9 @@ def _run_setup_model(model_file, scenario, model_format, override_dict):
                 f'extension for "{model_file}". Set format explicitly with '
                 "--model_format."
             )
-    if isinstance(override_dict, str):
-        overrides = io.read_rich_yaml(override_dict)
-    else:
-        overrides = io.AttrDict()
 
     if model_format == "yaml":
-        model = Model(model_file, scenario=scenario, override_dict=overrides)
+        model = Model(model_file, scenario=scenario, override_dict=override_dict)
     elif model_format == "netcdf":
         if scenario is not None or override_dict is not None:
             raise ValueError(
@@ -279,9 +278,9 @@ def run(
         # Else run the model, then save outputs
         else:
             click.secho("Starting model run...")
-            kwargs = {}
+
             if save_logs:
-                kwargs["solve.save_logs"] = save_logs
+                model.config.set_key("solve.save_logs", save_logs)
 
             if save_csv is None and save_netcdf is None:
                 click.secho(
@@ -290,17 +289,17 @@ def run(
                     fg="red",
                     bold=True,
                 )
+            # If save_netcdf is used, override the 'save_per_spore_path' to point to a
+            # directory of the same name as the planned netcdf
 
-            if (
-                save_netcdf
-                and model.config.solve.spores.save_per_spore_path is not None
-            ):
-                # If save_netcdf is used, override the 'save_per_spore_path' to point to
-                # a directory of the same name as the planned netcdf
-                kwargs["solve.spores.save_per_spore_path"] = (Path(save_netcdf).parent,)
+            if save_netcdf and model.config.solve.spores_save_per_spore:
+                model.config.set_key(
+                    "solve.spores_save_per_spore_path",
+                    save_netcdf.replace(".nc", "/spore_{}.nc"),
+                )
 
             model.build()
-            model.solve(**kwargs)
+            model.solve()
             termination = model._model_data.attrs.get(
                 "termination_condition", "unknown"
             )
@@ -401,4 +400,4 @@ def generate_scenarios(
             }
         }
 
-        io.to_yaml(scenarios, path=out_file)
+        AttrDict(scenarios).to_yaml(out_file)

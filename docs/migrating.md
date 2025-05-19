@@ -67,9 +67,9 @@ Instead, you define all your technology parameters at the same level.
         dims: costs
     ```
 
-### `file=`/`df=` → `data_tables` section
+### `file=`/`df=` → `data_sources` section
 
-`file=/df=` parameter values as references to timeseries data is replaced with loading tabular data at the top-level using the `data_tables` key.
+`file=/df=` parameter values as references to timeseries data is replaced with loading tabular data at the top-level using the `data_sources` key.
 
 Assuming you have these two files:
 
@@ -108,9 +108,9 @@ supply_file.csv:
 === "v0.7"
 
     ```yaml
-    data_tables:
+    data_sources:
       demand_data:
-        data: demand_file.csv
+        source: demand_file.csv
         rows: timesteps
         columns: nodes
         add_dims:
@@ -118,7 +118,7 @@ supply_file.csv:
           parameters: sink_equals
 
       supply_data:
-        data: supply_file.csv
+        source: supply_file.csv
         rows: timesteps
         columns: nodes
         add_dims:
@@ -127,7 +127,7 @@ supply_file.csv:
     ```
 
 !!! info "See also"
-    [`data_tables` introduction](creating/data_tables.md); [`data_tables` tutorial][loading-tabular-data].
+    [`data_sources` introduction](creating/data_sources.md); [`data_sources` tutorial][loading-tabular-data].
 
 ### Negative → positive demand and carrier consumption values
 
@@ -161,7 +161,7 @@ This split means you can change configuration options on-the-fly if you are work
       build:
         mode: plan
       solve:
-        solver: cbc
+        solver: glpk
     ```
 
 === "Python"
@@ -170,7 +170,7 @@ This split means you can change configuration options on-the-fly if you are work
     import calliope
     model = calliope.Model(time_subset=["2005-01", "2005-02"])
     model.build(mode="plan")
-    model.solve(solver="cbc")
+    model.solve(solver="glpk")
     ```
 
 !!! info "See also"
@@ -181,11 +181,10 @@ This split means you can change configuration options on-the-fly if you are work
 `locations` (abbreviated to `locs` in the Calliope data dimensions) has been renamed to `nodes` (no abbreviation).
 This allows us to not require an abbreviation and is a disambiguation from the [pandas.DataFrame.loc][] and [xarray.DataArray.loc][] methods.
 
-### `parent` and `tech_groups` → `base_tech` and `templates`
+### `parent` → `base_tech` + `template`
 
-Technology `parent` inheritance has been renamed to `base_tech`, which is fixed to be one of [`demand`, `supply`, `conversion`, `transmission`, `storage`].
-
-The `tech_groups` functionality has been removed in favour of a new, more flexible, `templates` functionality.
+Technology inheritance has been unlinked from its abstract "base" technology.
+`template` allows for inheriting attributes from `templates` while `base_tech` is fixed to be one of [`demand`, `supply`, `conversion`, `transmission`, `storage`].
 
 === "v0.6"
 
@@ -270,7 +269,7 @@ We have changed the nesting structure for defining technology costs so they are 
 ### `links` → transmission links defined in `techs`
 
 The top-level key `links` no longer exists.
-Instead, links are defined as separate transmission technologies in `techs`, including `link_to`/`link_from` keys:
+Instead, links are defined as separate transmission technologies in `techs`, including `to`/`from` keys:
 
 === "v0.6"
 
@@ -298,23 +297,23 @@ Instead, links are defined as separate transmission technologies in `techs`, inc
     ```yaml
     techs:
       x1_to_x2_ac_transmission:
-        link_from: X1
-        link_to: X2
+        from: X1
+        to: X2
         base_tech: transmission
         flow_cap_max: 10
       x1_to_x2_dc_transmission:
-        link_from: X1
-        link_to: X2
+        from: X1
+        to: X2
         base_tech: transmission
         flow_cap_max: 5
     ```
 
 !!! note
-    You can use [`templates`](creating/yaml.md#reusing-definitions-through-templates) to minimise duplications in the new transmission technology definition.
+    You can use [`templates`](creating/templates.md) to minimise duplications in the new transmission technology definition.
 
 ### Renaming parameters/decision variables without core changes in function
 
-You may have already noticed new parameter names being referenced in examples of other changes.
+You may have a already noticed new parameter names being referenced in examples of other changes.
 We have renamed parameters to improve clarity in their function and to make it clear that although Calliope is designed to model energy systems, its flow representation is suitable for modelling any kind of flow (water, waste, etc.).
 
 Here are the main changes to parameter/decision variable names that are not linked to changes in functionality (those are detailed elsewhere on this page):
@@ -327,7 +326,6 @@ Here are the main changes to parameter/decision variable names that are not link
 * `energy_cap_min_use` → `flow_out_min_relative` (i.e., the value is relative to `flow_cap`).
 * `parasitic_eff` →  `flow_out_parasitic_eff`.
 * `force_asynchronous_prod_con` → `force_async_flow`.
-* `cost_var` → `cost_operation_variable`.
 * `exists` → `active`.
 
 !!! info "See also"
@@ -340,9 +338,9 @@ Along with [changing the YAML hierarchy of model configuration](#model-and-run-�
 
 * `model.subset_time` → `config.init.time_subset`
 * `model.time: {function: resample, function_options: {'resolution': '6H'}}` → `config.init.time_resample`
-* `run.operation.window` → `config.build.operate.window`
-* `run.operation.horizon` → `config.build.operate.horizon`
-* `run.operation.use_cap_results` → `config.build.operate.use_cap_results`
+* `run.operation.window` → `config.build.operate_window`
+* `run.operation.horizon` → `config.build.operate_horizon`
+* `run.operation.use_cap_results` → `config.build.operate_use_cap_results`
 
 We have also moved some _data_ out of the configuration and into the [top-level `parameters` section](creating/parameters.md):
 
@@ -360,17 +358,12 @@ Instead of defining the binary trigger `force_resource` to enforce the productio
 
 If you want these resource uses to be upper or lower bounds, use the equivalent `_max`/`_min` parameters.
 
-You can find an example of this change [above](#filedf-→-data_tables-section).
+You can find an example of this change [above](#filedf-→-data_sources-section).
 
 ### `units` + `purchased` → `purchased_units`
 
 We have rolled the integer decision variable `units` and the binary `purchased` into one decision variable `purchased_units`.
 To achieve the same functionality for `purchased`, set `purchased_units_max: 1`.
-
-### `cost_investment` → `cost_investment_annualised` + `cost_operation_fixed`
-
-Investment costs are split out into the component caused by annual operation and maintenance (`cost_operation_fixed`) and an annualised equivalent of the initial capital investment (`cost_investment_annualised`).
-`cost_investment` still exists in the model results and represents the initial capital investment, i.e., without applying the economic depreciation rate.
 
 ### Explicitly triggering MILP and storage decision variables/constraints
 
@@ -516,8 +509,8 @@ Therefore, `24H` is equivalent to `24` in v0.6 if you are using hourly resolutio
           init:
             time_resample: 6H
           build:
-            operate.window: 12H
-            operate.horizon: 24H
+            operate_window: 12H
+            operate_horizon: 24H
         ```
 
 !!! warning
@@ -697,8 +690,8 @@ We have re-implemented all these constraints as tested additional math snippets,
 
 ### Configuration options
 
-* With the [change in how timeseries data is defined](#filedf-→-data_tables-section), we have removed the reference to a `timeseries_data_path`.
-Instead, data table filepaths should always be relative to the `model.yaml` file or they should be absolute paths.
+* With the [change in how timeseries data is defined](#filedf-→-data_sources-section), we have removed the reference to a `timeseries_data_path`.
+Instead, data source filepaths should always be relative to the `model.yaml` file or they should be absolute paths.
 * We have removed `run.relax_constraint` alongside [removing group constraints](#group-constraints).
 * We have removed `model.file_allowed`, which many users will not even know existed (it was a largely internal configuration option)!
 Instead, it is possible to index any parameter over the time dimension.
@@ -747,7 +740,8 @@ This means you could define different output carriers for a `supply` technology,
 
 ### `templates` for nodes
 
-The new [`templates` key](creating/yaml.md#reusing-definitions-through-templates) makes up for the [removal of grouping node names in keys by comma separation](#comma-separated-node-definitions).
+The new [`templates` key](creating/templates.md) can be applied to `nodes` as well as `techs`.
+This makes up for the [removal of grouping node names in keys by comma separation](#comma-separated-node-definitions).
 
 So, to achieve this result:
 
@@ -963,11 +957,11 @@ nodes:
 
 ### Loading non-timeseries tabular data
 
-With the [change in loading timeseries data](#filedf-→-data_tables-section), we have expanded loading of tabular data to allow any data input.
+With the [change in loading timeseries data](#filedf-→-data_sources-section), we have expanded loading of tabular data to allow any data input.
 Technically, you can now define all your data in tables (although we would still recommend a mix of YAML and tabular model definition).
 
 !!! info "See also"
-    `data_tables` [introduction](creating/data_tables.md) and [tutorial][loading-tabular-data].
+    `data_sources` [introduction](creating/data_sources.md) and [tutorial][loading-tabular-data].
 
 ### YAML-based math syntax
 

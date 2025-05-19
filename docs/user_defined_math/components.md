@@ -12,7 +12,7 @@ A decision variable in Calliope math looks like this:
 
 ```yaml
 variables:
---8<-- "src/calliope/math/plan.yaml:variable"
+--8<-- "src/calliope/math/base.yaml:variable"
 ```
 
 1. It needs a unique name (`storage_cap` in the example above).
@@ -36,7 +36,7 @@ Without a `where` string, all valid members (according to the `definition_matrix
     If a value for a valid variable member is undefined in the referenced parameter, the decision variable will be unbounded for this member.
 1. It can be deactivated so that it does not appear in the built optimisation problem by setting `active: false`.
 1. It can take on a `default` value that will be used in math operations to avoid `NaN` values creeping in.
-The default value should be set such that it has no impact on the optimisation problem if it is included (most of the time, this means `NaN`).
+The default value should be set such that it has no impact on the optimisation problem if it is included (most of the time, this means setting it to zero).
 
 ## Global Expressions
 
@@ -48,7 +48,7 @@ To not clutter the objective function with all combinations of variables and par
 
 ```yaml
 global_expressions:
---8<-- "src/calliope/math/plan.yaml:expression"
+--8<-- "src/calliope/math/base.yaml:expression"
 ```
 
 Global expressions are by no means necessary to include, but can make more complex linear expressions easier to keep track of and can reduce post-processing requirements.
@@ -63,7 +63,7 @@ Without a `where` string, all valid members (according to the `definition_matrix
 The equation expressions do _not_ have comparison operators; those are reserved for [constraints](#constraints)
 1. It can be deactivated so that it does not appear in the built optimisation problem by setting `active: false`.
 1. It can take on a `default` value that will be used in math operations to avoid `NaN` values creeping in.
-The default value should be set such that it has no impact on the optimisation problem if it is included (most of the time, this means `NaN`).
+The default value should be set such that it has no impact on the optimisation problem if it is included (most of the time, this means setting it to zero).
 
 ## Constraints
 
@@ -74,7 +74,7 @@ Here is an example:
 
 ```yaml
 constraints:
---8<-- "src/calliope/math/plan.yaml:constraint"
+--8<-- "src/calliope/math/base.yaml:constraint"
 ```
 
 1. It needs a unique name (`set_storage_initial` in the above example).
@@ -138,7 +138,7 @@ With your constrained decision variables and a global expression that binds thes
 
 ```yaml
 objectives:
---8<-- "src/calliope/math/plan.yaml:objective"
+--8<-- "src/calliope/math/base.yaml:objective"
 ```
 
 1. It needs a unique name.

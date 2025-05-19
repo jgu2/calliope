@@ -36,20 +36,18 @@ To create a development environment for calliope, with all libraries required fo
 1. Open the command line (or the "miniforge prompt" in Windows).
 1. Download (a.k.a., clone) the calliope repository: `git clone git@github.com:calliope-project/calliope.git`
 1. Change into the `calliope` directory: `cd calliope`
-1. Create the calliope mamba environment: `mamba create -n calliope -c conda-forge --file requirements/base.txt --file requirements/dev.txt coin-or-cbc gurobi::gurobi`
+1. Create the calliope mamba environment: `mamba create -n calliope -c conda-forge --file requirements/base.txt --file requirements/dev.txt gurobi::gurobi`
 1. Activate the calliope mamba environment: `mamba activate calliope`
 1. Install the calliope package into the environment, in editable mode and ignoring dependencies (we have dealt with those when creating the mamba environment): `pip install --no-deps -e .`
-1. Install the interactive python shell (necessary when testing our documentation locally): `ipython kernel install --user --name=calliope_docs_build`
 
 All together:
 
 ``` shell
 git clone git@github.com:calliope-project/calliope.git
 cd calliope
-mamba create -n calliope -c conda-forge --file requirements/base.txt --file requirements/dev.txt coin-or-cbc gurobi::gurobi
+mamba create -n calliope -c conda-forge --file requirements/base.txt --file requirements/dev.txt gurobi::gurobi
 mamba activate calliope
 pip install --no-deps -e .
-ipython kernel install --user --name=calliope_docs_build
 ```
 
 If installing directly with pip, you can install these libraries using the `dev` option, i.e., `pip install -e '.[dev]'`

@@ -17,8 +17,6 @@ import xarray as xr
 from calliope.backend import backend_model, parsing
 from calliope.exceptions import BackendError, BackendWarning
 from calliope.exceptions import warn as model_warn
-from calliope.preprocess import CalliopeMath
-from calliope.schemas import config_schema
 
 if importlib.util.find_spec("gurobipy") is not None:
     import gurobipy
@@ -42,40 +40,22 @@ COMPONENT_TRANSLATOR = {
 class GurobiBackendModel(backend_model.BackendModel):
     """gurobipy-specific backend functionality."""
 
-    OBJECTIVE_SENSE_DICT: dict[str, int]
-    if importlib.util.find_spec("gurobipy") is not None:
-        OBJECTIVE_SENSE_DICT = {
-            "minimize": gurobipy.GRB.MINIMIZE,
-            "minimise": gurobipy.GRB.MINIMIZE,
-            "maximize": gurobipy.GRB.MAXIMIZE,
-            "maximise": gurobipy.GRB.MAXIMIZE,
-        }
-    else:
-        # As of Gurobi v11, these are the correct integer values for the above constants
-        OBJECTIVE_SENSE_DICT = {
-            "minimize": 1,
-            "minimise": 1,
-            "maximize": -1,
-            "maximise": -1,
-        }
-
-    def __init__(
-        self, inputs: xr.Dataset, math: CalliopeMath, build_config: config_schema.Build
-    ) -> None:
+    def __init__(self, inputs: xr.Dataset, **kwargs) -> None:
         """Gurobi solver interface class.
 
         Args:
             inputs (xr.Dataset): Calliope model data.
-            math (CalliopeMath): Calliope math.
-            build_config: Build configuration options.
+            **kwargs: passed directly to the solver.
         """
         if importlib.util.find_spec("gurobipy") is None:
             raise ImportError(
                 "Install the `gurobipy` package to build the optimisation problem with the Gurobi backend."
             )
-        super().__init__(inputs, math, build_config, gurobipy.Model())
+        super().__init__(inputs, gurobipy.Model(), **kwargs)
         self._instance: gurobipy.Model
         self.shadow_prices = GurobiShadowPrices(self)
+
+        self._add_all_inputs_as_parameters()
 
     def add_parameter(  # noqa: D102, override
         self, parameter_name: str, parameter_values: xr.DataArray, default: Any = np.nan
@@ -150,28 +130,28 @@ class GurobiBackendModel(backend_model.BackendModel):
     def add_objective(  # noqa: D102, override
         self, name: str, objective_dict: parsing.UnparsedObjective
     ) -> None:
-        sense = self.OBJECTIVE_SENSE_DICT[objective_dict["sense"]]
+        sense_dict = {
+            "minimize": gurobipy.GRB.MINIMIZE,
+            "minimise": gurobipy.GRB.MINIMIZE,
+            "maximize": gurobipy.GRB.MAXIMIZE,
+            "maximise": gurobipy.GRB.MAXIMIZE,
+        }
+
+        sense = sense_dict[objective_dict["sense"]]
 
         def _objective_setter(
             element: parsing.ParsedBackendEquation, where: xr.DataArray, references: set
         ) -> xr.DataArray:
             expr = element.evaluate_expression(self, references=references)
 
-            if name == self.config.objective:
+            if name == self.inputs.attrs["config"].build.objective:
                 self._instance.setObjective(expr.item(), sense=sense)
-                self.objective = name
+
                 self.log("objectives", name, "Objective activated.")
 
             return xr.DataArray(expr)
 
         self._add_component(name, objective_dict, _objective_setter, "objectives")
-
-    def set_objective(self, name: str) -> None:  # noqa: D102, override
-        to_set = self.objectives[name]
-        sense = self.OBJECTIVE_SENSE_DICT[to_set.attrs["sense"]]
-        self._instance.setObjective(to_set.item(), sense=sense)
-        self.objective = name
-        self.log("objectives", name, "Objective activated.", level="info")
 
     def get_parameter(  # noqa: D102, override
         self, name: str, as_backend_objs: bool = True
@@ -251,19 +231,25 @@ class GurobiBackendModel(backend_model.BackendModel):
             return global_expression
 
     def _solve(
-        self, solve_config: config_schema.Solve, warmstart: bool = False
+        self,
+        solver: str,
+        solver_io: str | None = None,
+        solver_options: dict | None = None,
+        save_logs: str | None = None,
+        warmstart: bool = False,
+        **solve_config,
     ) -> xr.Dataset:
         self._instance.resetParams()
 
-        if solve_config.solver_options is not None:
-            for k, v in solve_config.solver_options.items():
+        if solver_options is not None:
+            for k, v in solver_options.items():
                 self._instance.setParam(k, v)
 
         if not warmstart:
             self._instance.setParam("LPWarmStart", 0)
 
-        if solve_config.save_logs is not None:
-            logdir = Path(solve_config.save_logs)
+        if save_logs is not None:
+            logdir = Path(save_logs)
             self._instance.setParam("LogFile", (logdir / "gurobi.log").as_posix())
 
         self._instance.update()
@@ -289,7 +275,7 @@ class GurobiBackendModel(backend_model.BackendModel):
 
     def verbose_strings(self) -> None:  # noqa: D102, override
         def __renamer(val, *idx, name: str, attr: str):
-            if pd.notna(val):
+            if pd.notnull(val):
                 new_obj_name = f"{name}[{', '.join(idx)}]"
                 setattr(val, attr, new_obj_name)
 
@@ -403,7 +389,7 @@ class GurobiBackendModel(backend_model.BackendModel):
                 )
                 continue
 
-            existing_bound_param = self.math.data.get_key(
+            existing_bound_param = self.inputs.attrs["math"].get_key(
                 f"variables.{name}.bounds.{bound_name}", None
             )
             if existing_bound_param in self.parameters:

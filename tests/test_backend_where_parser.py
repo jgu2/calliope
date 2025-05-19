@@ -3,6 +3,7 @@ import pyparsing
 import pytest
 import xarray as xr
 
+from calliope.attrdict import AttrDict
 from calliope.backend import expression_parser, helper_functions, where_parser
 from calliope.exceptions import BackendError
 
@@ -11,6 +12,10 @@ from .common.util import check_error_or_warning
 SUB_EXPRESSION_CLASSIFIER = expression_parser.SUB_EXPRESSION_CLASSIFIER
 
 BASE_DIMS = ["nodes", "techs", "carriers", "costs", "timesteps"]
+
+
+def parse_yaml(yaml_string):
+    return AttrDict.from_yaml_string(yaml_string)
 
 
 @pytest.fixture
@@ -83,19 +88,7 @@ def where(bool_operand, helper_function, data_var, comparison, subset):
 
 
 @pytest.fixture
-def dummy_build_config():
-    return {
-        "foo": True,
-        "FOO": "baz",
-        "foo1": np.inf,
-        "bar": {"foobar": "baz"},
-        "a_b": 0,
-        "b_a": [1, 2],
-    }
-
-
-@pytest.fixture
-def eval_kwargs(dummy_pyomo_backend_model, dummy_build_config):
+def eval_kwargs(dummy_pyomo_backend_model):
     return {
         "input_data": dummy_pyomo_backend_model.inputs,
         "backend_interface": dummy_pyomo_backend_model,
@@ -103,7 +96,6 @@ def eval_kwargs(dummy_pyomo_backend_model, dummy_build_config):
         "equation_name": "foo",
         "return_type": "array",
         "references": set(),
-        "build_config": dummy_build_config,
     }
 
 
@@ -248,7 +240,7 @@ class TestParserElements:
             parsed_[0].eval(**eval_kwargs)
 
     @pytest.mark.parametrize(
-        ("config_string", "type_"), [("config.b_a", "list"), ("config.bar", "dict")]
+        ("config_string", "type_"), [("config.b_a", "list"), ("config.bar", "AttrDict")]
     )
     def test_config_fail_datatype(
         self, config_option, eval_kwargs, config_string, type_
@@ -396,7 +388,7 @@ class TestParserElements:
             "[bar] in",  # missing set name
             "foo in [bar]",  # Wrong order of subset and set name
             "[foo=bar] in foo",  # comparison string in subset
-            "[defined(techs=[tech1, tech2], within=nodes, how=any)] in foo",  # helper function in subset
+            "[inheritance(techs=a)] in foo"  # helper function in subset
             "(bar) in foo",  # wrong brackets
         ],
     )
@@ -427,7 +419,7 @@ class TestParserMasking:
         [
             ("all_inf", "all_false"),
             ("config.foo=True", True),
-            ("get_val_at_index(nodes=0)", "foo"),
+            ("inheritance(nodes=boo)", "nodes_inheritance_boo_bool"),
         ],
     )
     def test_no_aggregation(

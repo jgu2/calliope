@@ -1,4 +1,4 @@
-# Parameters for which loading from file via `data_tables` is prohibited
+# Parameters for which loading from file via `data_sources` is prohibited
 active: >-
   Technology/Node activation (`active`) can only be used in the
   YAML model definition.
@@ -6,6 +6,4 @@ definition_matrix: >-
   `definition_matrix` is a protected array.
   It will be generated internally based on the values you assign to the `carrier_in` and `carrier_out` parameters.
 template: >-
-  Template calls (`template`) can only be used in the YAML model definition.
-templates: >-
-  Template definitions (`templates`) can only be used in the YAML model definition.
+  Technology/Node template inheritance (`template`) can only be used in the YAML model definition.

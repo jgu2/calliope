@@ -176,7 +176,7 @@ properties:
           If too large, numerical problems may arise in the optimisation.
         default: 1e9
         x-type: float
-        oneOf: &simple_number
+        oneOf:
           - type: number
           - type: object
             additionalProperties: false
@@ -188,29 +188,6 @@ properties:
         default: 1
         x-type: float
         description: Weightings for cost classes to apply in the objective function.
-      spores_baseline_cost:
-        description: >-
-          The baseline optimal cost of the system used to set the maximum cost constraint when undertaking SPORES analysis.
-          This usually only applies to `monetary` cost, but could be applied to other non-SPORES costs as necessary.
-        $ref: "#/$defs/TechCostNullNumber"
-        default: .inf
-        x-type: float
-      spores_slack:
-        description: >-
-          The amount of slack in the maximum cost constraint applied in SPORES mode.
-          This is a fraction that is applied to the baseline cost, e.g., `0.1` would be used to set a maximum cost constraint of `spores_baseline_cost * 1.1`
-        default: 0
-        x-type: float
-        oneOf: *simple_number
-      spores_score:
-        description: >-
-          The per-tech & per-node SPORES score used to penalise technologies at nodes that have appeared in previous SPORES iterations.
-        default: 0
-        x-type: float
-        oneOf:
-          - $ref: "#/$defs/unIndexedParamVal"
-          - $ref: "#/$defs/IndexedParam"
-
     patternProperties:
       '^[^_^\d][\w]*$':
         oneOf:
@@ -230,28 +207,28 @@ properties:
           - oneOf:
             - required: ["base_tech", "carrier_in", "carrier_out"]
               not:
-                required: ["link_to", "link_from"]
+                required: ["to", "from"]
               properties:
                 base_tech: {const: conversion}
             - required: ["base_tech", "carrier_in"]
               not:
-                  required: ["carrier_out", "link_to", "link_from"]
+                  required: ["carrier_out", "to", "from"]
               properties:
                 base_tech: {const: demand}
 
             - required: ["base_tech", "carrier_in", "carrier_out"]
               not:
-                required: ["link_to", "link_from"]
+                required: ["to", "from"]
               properties:
                 base_tech: {const: storage}
 
             - required: ["base_tech", "carrier_out"]
               not:
-                  required: ["carrier_in", "link_to", "link_from"]
+                  required: ["carrier_in", "to", "from"]
               properties:
                 base_tech: {const: supply}
 
-            - required: ["base_tech", "link_from", "link_to", "carrier_in", "carrier_out"]
+            - required: ["base_tech", "from", "to", "carrier_in", "carrier_out"]
               properties:
                 base_tech: {const: transmission}
                 from:
@@ -543,7 +520,7 @@ properties:
             description: >-
               Sets `area_use` to a parameter in operate mode.
               NOTE: this parameter cannot be used in `plan` mode as it clashes with the decision variable of the same name.
-            x-unit: $\text{area}$.
+            x-unit: $\text{area}^{2}$.
 
           area_use_max:
             $ref: "#/$defs/TechParamNullNumber"
@@ -552,7 +529,7 @@ properties:
             title: Maximum usable area.
             description: >-
               If set to a finite value, limits the upper bound of the `area_use` decision variable to this value.
-            x-unit: $\text{area}$.
+            x-unit: $\text{area}^{2}$.
 
           area_use_min:
             $ref: "#/$defs/TechParamNullNumber"
@@ -561,7 +538,7 @@ properties:
             title: Minimum usable area.
             description: >-
               Limits the lower bound of the `area_use` decision variable to this value.
-            x-unit: $\text{area}$.
+            x-unit: $\text{area}^{2}$.
 
           area_use_per_flow_cap:
             $ref: "#/$defs/TechParamNullNumber"
@@ -570,7 +547,7 @@ properties:
             title: Area use per flow capacity
             description: >-
               If set, forces `area_use` to follow `flow_cap` with the given numerical ratio (e.g. setting to 1.5 means that `area_use == 1.5 * flow_cap`).
-            x-unit: $\frac{\text{area}}{\text{power}}$.
+            x-unit: $\frac{\text{area}^{2}}{\text{power}}$.
 
           storage_cap:
             $ref: "#/$defs/TechParamNullNumber"
@@ -581,7 +558,7 @@ properties:
             description: >-
               Sets `storage_cap` to a parameter in operate mode.
               NOTE: this parameter cannot be used in `plan` mode as it clashes with the decision variable of the same name.
-            x-unit: $\text{area}$.
+            x-unit: $\text{area}^{2}$.
 
           storage_cap_max:
             $ref: "#/$defs/TechParamNullNumber"
@@ -836,7 +813,7 @@ properties:
             x-resample_method: first
             x-type: float
             title: One way transmission.
-            description: Forces a transmission technology to only move flow in one direction on the link, i.e. from `link_from` to `link_to`.
+            description: Forces a transmission technology to only move flow in one direction on the link, i.e. from `from` to `to`.
 
           distance:
             type: ["null", number]
@@ -973,7 +950,7 @@ properties:
             title: Cost of area use.
             description: >-
               Cost per unit `area_use`.
-            x-unit: $\text{area}^{-1}$.
+            x-unit: $\text{area}^{-2}$.
 
           cost_source_cap:
             $ref: "#/$defs/TechCostNullNumber"
@@ -1039,7 +1016,3 @@ properties:
             minimum: 0
             default: .inf
             x-resample_method: mean
-            title: Available area at the given node.
-            description: >-
-              Limits the total area that can be occupied by all technologies which have the `area_use` decision variable activated.
-            x-unit: $\text{area}$.

@@ -2,16 +2,13 @@ import logging
 from contextlib import contextmanager
 
 import numpy as np
-import numpy.testing
 import pandas as pd
 import pytest
-import xarray as xr
 
 import calliope
-import calliope.backend
-import calliope.preprocess
 
 from .common.util import build_test_model as build_model
+from .common.util import check_error_or_warning
 
 LOGGER = "calliope.model"
 
@@ -33,6 +30,256 @@ class TestModel:
 
     def test_info_simple_model(self, simple_supply):
         simple_supply.info()
+
+    def test_update_observed_dict(self, national_scale_example):
+        national_scale_example.config.build["backend"] = "foo"
+        assert national_scale_example._model_data.attrs["config"].build.backend == "foo"
+
+    def test_add_observed_dict_from_model_data(
+        self, national_scale_example, dict_to_add
+    ):
+        national_scale_example._model_data.attrs["foo"] = dict_to_add
+        national_scale_example._add_observed_dict("foo")
+        assert national_scale_example.foo == dict_to_add
+        assert national_scale_example._model_data.attrs["foo"] == dict_to_add
+
+    def test_add_observed_dict_from_dict(self, national_scale_example, dict_to_add):
+        national_scale_example._add_observed_dict("bar", dict_to_add)
+        assert national_scale_example.bar == dict_to_add
+        assert national_scale_example._model_data.attrs["bar"] == dict_to_add
+
+    def test_add_observed_dict_not_available(self, national_scale_example):
+        with pytest.raises(calliope.exceptions.ModelError) as excinfo:
+            national_scale_example._add_observed_dict("baz")
+        assert check_error_or_warning(
+            excinfo,
+            "Expected the model property `baz` to be a dictionary attribute of the model dataset",
+        )
+        assert not hasattr(national_scale_example, "baz")
+
+    def test_add_observed_dict_not_dict(self, national_scale_example):
+        with pytest.raises(TypeError) as excinfo:
+            national_scale_example._add_observed_dict("baz", "bar")
+        assert check_error_or_warning(
+            excinfo,
+            "Attempted to add dictionary property `baz` to model, but received argument of type `str`",
+        )
+
+
+class TestAddMath:
+    @pytest.fixture(scope="class")
+    def storage_inter_cluster(self):
+        return build_model(
+            {"config.init.add_math": ["storage_inter_cluster"]},
+            "simple_supply,two_hours,investment_costs",
+        )
+
+    @pytest.fixture(scope="class")
+    def storage_inter_cluster_plus_user_def(self, temp_path, dummy_int: int):
+        new_constraint = calliope.AttrDict(
+            {"variables": {"storage": {"bounds": {"min": dummy_int}}}}
+        )
+        file_path = temp_path.join("custom-math.yaml")
+        new_constraint.to_yaml(file_path)
+        return build_model(
+            {"config.init.add_math": ["storage_inter_cluster", str(file_path)]},
+            "simple_supply,two_hours,investment_costs",
+        )
+
+    @pytest.fixture(scope="class")
+    def temp_path(self, tmpdir_factory):
+        return tmpdir_factory.mktemp("custom_math")
+
+    def test_internal_override(self, storage_inter_cluster):
+        assert "storage_intra_max" in storage_inter_cluster.math["constraints"].keys()
+
+    def test_variable_bound(self, storage_inter_cluster):
+        assert (
+            storage_inter_cluster.math["variables"]["storage"]["bounds"]["min"]
+            == -np.inf
+        )
+
+    @pytest.mark.parametrize(
+        ("override", "expected"),
+        [
+            (["foo"], ["foo"]),
+            (["bar", "foo"], ["bar", "foo"]),
+            (["foo", "storage_inter_cluster"], ["foo"]),
+            (["foo.yaml"], ["foo.yaml"]),
+        ],
+    )
+    def test_allowed_internal_constraint(self, override, expected):
+        with pytest.raises(calliope.exceptions.ModelError) as excinfo:
+            build_model(
+                {"config.init.add_math": override},
+                "simple_supply,two_hours,investment_costs",
+            )
+        assert check_error_or_warning(
+            excinfo,
+            f"Attempted to load additional math that does not exist: {expected}",
+        )
+
+    def test_internal_override_from_yaml(self, temp_path):
+        new_constraint = calliope.AttrDict(
+            {
+                "constraints": {
+                    "constraint_name": {
+                        "foreach": [],
+                        "where": "",
+                        "equations": [{"expression": ""}],
+                    }
+                }
+            }
+        )
+        new_constraint.to_yaml(temp_path.join("custom-math.yaml"))
+        m = build_model(
+            {"config.init.add_math": [str(temp_path.join("custom-math.yaml"))]},
+            "simple_supply,two_hours,investment_costs",
+        )
+        assert "constraint_name" in m.math["constraints"].keys()
+
+    def test_override_existing_internal_constraint(self, temp_path, simple_supply):
+        file_path = temp_path.join("custom-math.yaml")
+        new_constraint = calliope.AttrDict(
+            {
+                "constraints": {
+                    "flow_capacity_per_storage_capacity_min": {"foreach": ["nodes"]}
+                }
+            }
+        )
+        new_constraint.to_yaml(file_path)
+        m = build_model(
+            {"config.init.add_math": [str(file_path)]},
+            "simple_supply,two_hours,investment_costs",
+        )
+        base = simple_supply.math["constraints"][
+            "flow_capacity_per_storage_capacity_min"
+        ]
+        new = m.math["constraints"]["flow_capacity_per_storage_capacity_min"]
+
+        for i in base.keys():
+            if i == "foreach":
+                assert new[i] == ["nodes"]
+            else:
+                assert base[i] == new[i]
+
+    def test_override_order(self, temp_path, simple_supply):
+        to_add = []
+        for path_suffix, foreach in [(1, "nodes"), (2, "techs")]:
+            constr = calliope.AttrDict(
+                {
+                    "constraints.flow_capacity_per_storage_capacity_min.foreach": [
+                        foreach
+                    ]
+                }
+            )
+            filepath = temp_path.join(f"custom-math-{path_suffix}.yaml")
+            constr.to_yaml(filepath)
+            to_add.append(str(filepath))
+
+        m = build_model(
+            {"config.init.add_math": to_add}, "simple_supply,two_hours,investment_costs"
+        )
+
+        base = simple_supply.math["constraints"][
+            "flow_capacity_per_storage_capacity_min"
+        ]
+        new = m.math["constraints"]["flow_capacity_per_storage_capacity_min"]
+
+        for i in base.keys():
+            if i == "foreach":
+                assert new[i] == ["techs"]
+            else:
+                assert base[i] == new[i]
+
+    def test_override_existing_internal_constraint_merge(
+        self, simple_supply, storage_inter_cluster, storage_inter_cluster_plus_user_def
+    ):
+        storage_inter_cluster_math = storage_inter_cluster.math["variables"]["storage"]
+        base_math = simple_supply.math["variables"]["storage"]
+        new_math = storage_inter_cluster_plus_user_def.math["variables"]["storage"]
+        expected = {
+            "title": storage_inter_cluster_math["title"],
+            "description": storage_inter_cluster_math["description"],
+            "default": base_math["default"],
+            "unit": base_math["unit"],
+            "foreach": base_math["foreach"],
+            "where": base_math["where"],
+            "bounds": {
+                "min": new_math["bounds"]["min"],
+                "max": base_math["bounds"]["max"],
+            },
+        }
+
+        assert new_math == expected
+
+
+class TestValidateMathDict:
+    def test_base_math(self, caplog, simple_supply):
+        with caplog.at_level(logging.INFO, logger=LOGGER):
+            simple_supply.validate_math_strings(simple_supply.math)
+        assert "Model: validated math strings" in [
+            rec.message for rec in caplog.records
+        ]
+
+    @pytest.mark.parametrize(
+        ("equation", "where"),
+        [
+            ("1 == 1", "True"),
+            (
+                "flow_out * flow_out_eff + sum(cost, over=costs) <= .inf",
+                "base_tech=supply and flow_out_eff>0",
+            ),
+        ],
+    )
+    def test_add_math(self, caplog, simple_supply, equation, where):
+        with caplog.at_level(logging.INFO, logger=LOGGER):
+            simple_supply.validate_math_strings(
+                {
+                    "constraints": {
+                        "foo": {"equations": [{"expression": equation}], "where": where}
+                    }
+                }
+            )
+        assert "Model: validated math strings" in [
+            rec.message for rec in caplog.records
+        ]
+
+    @pytest.mark.parametrize(
+        "component_dict",
+        [
+            {"equations": [{"expression": "1 = 1"}]},
+            {"equations": [{"expression": "1 = 1"}], "where": "foo[bar]"},
+        ],
+    )
+    @pytest.mark.parametrize("both_fail", [True, False])
+    def test_add_math_fails(self, simple_supply, component_dict, both_fail):
+        math_dict = {"constraints": {"foo": component_dict}}
+        errors_to_check = [
+            "math string parsing (marker indicates where parsing stopped, which might not be the root cause of the issue; sorry...)",
+            " * constraints:foo:",
+            "equations[0].expression",
+            "where",
+        ]
+        if both_fail:
+            math_dict["constraints"]["bar"] = component_dict
+            errors_to_check.append("* constraints:bar:")
+        else:
+            math_dict["constraints"]["bar"] = {"equations": [{"expression": "1 == 1"}]}
+
+        with pytest.raises(calliope.exceptions.ModelError) as excinfo:
+            simple_supply.validate_math_strings(math_dict)
+        assert check_error_or_warning(excinfo, errors_to_check)
+
+    @pytest.mark.parametrize("eq_string", ["1 = 1", "1 ==\n1[a]"])
+    def test_add_math_fails_marker_correct_position(self, simple_supply, eq_string):
+        math_dict = {"constraints": {"foo": {"equations": [{"expression": eq_string}]}}}
+
+        with pytest.raises(calliope.exceptions.ModelError) as excinfo:
+            simple_supply.validate_math_strings(math_dict)
+        errorstrings = str(excinfo.value).split("\n")
+        # marker should be at the "=" sign, i.e., 2 characters from the end
+        assert len(errorstrings[-2]) - 2 == len(errorstrings[-1])
 
 
 class TestOperateMode:
@@ -72,11 +319,9 @@ class TestOperateMode:
         model.build(
             force=True,
             mode="operate",
-            operate={
-                "use_cap_results": True,
-                "window": request.param[0],
-                "horizon": request.param[1],
-            },
+            operate_use_cap_results=True,
+            operate_window=request.param[0],
+            operate_horizon=request.param[1],
         )
 
         with self.caplog_session(request) as caplog:
@@ -86,10 +331,20 @@ class TestOperateMode:
 
         return model, log
 
+    @pytest.fixture(scope="class")
+    def rerun_operate_log(self, request, operate_model_and_log):
+        """Solve in operate mode a second time, to trigger new log messages."""
+        with self.caplog_session(request) as caplog:
+            with caplog.at_level(logging.INFO):
+                operate_model_and_log[0].solve(force=True)
+            return caplog.text
+
     def test_backend_build_mode(self, operate_model_and_log):
         """Verify that we have run in operate mode"""
         operate_model, _ = operate_model_and_log
-        assert operate_model.backend.config.mode == "operate"
+        assert (
+            operate_model.backend.inputs.attrs["config"]["build"]["mode"] == "operate"
+        )
 
     def test_operate_mode_success(self, operate_model_and_log):
         """Solving in operate mode should lead to an optimal solution."""
@@ -106,14 +361,6 @@ class TestOperateMode:
         _, log = operate_model_and_log
         assert "Resetting model to first time window." not in log
 
-    @pytest.fixture
-    def rerun_operate_log(self, request, operate_model_and_log):
-        """Solve in operate mode a second time, to trigger new log messages."""
-        with self.caplog_session(request) as caplog:
-            with caplog.at_level(logging.INFO):
-                operate_model_and_log[0].solve(force=True)
-            return caplog.text
-
     def test_reset_model_window(self, rerun_operate_log):
         """The backend model time window needs resetting back to the start on rerunning in operate mode."""
         assert "Resetting model to first time window." in rerun_operate_log
@@ -121,8 +368,8 @@ class TestOperateMode:
     def test_end_of_horizon(self, operate_model_and_log):
         """Check that increasingly shorter time horizons are logged as model rebuilds."""
         operate_model, log = operate_model_and_log
-        config = operate_model.backend.config
-        if config.operate.window != config.operate.horizon:
+        config = operate_model.backend.inputs.attrs["config"]["build"]
+        if config["operate_window"] != config["operate_horizon"]:
             assert "Reaching the end of the timeseries." in log
         else:
             assert "Reaching the end of the timeseries." not in log
@@ -151,273 +398,6 @@ class TestOperateMode:
             calliope.exceptions.ModelError, match="Unable to run this model in op"
         ):
             m.build(mode="operate")
-
-    def test_build_operate_use_cap_results_error(self):
-        """Requesting to use capacity results should return an error if the model is not pre-solved."""
-        m = build_model({}, "simple_supply,operate,var_costs,investment_costs")
-        with pytest.raises(
-            calliope.exceptions.ModelError,
-            match="Cannot use plan mode capacity results in operate mode if a solution does not yet exist for the model.",
-        ):
-            m.build(mode="operate", operate={"use_cap_results": True})
-
-
-class TestSporesMode:
-    @contextmanager
-    def caplog_session(self, request):
-        """caplog for class/session-scoped fixtures.
-
-        See https://github.com/pytest-dev/pytest/discussions/11177
-        """
-        request.node.add_report_section = lambda *args: None
-        logging_plugin = request.config.pluginmanager.getplugin("logging-plugin")
-        for _ in logging_plugin.pytest_runtest_setup(request.node):
-            yield pytest.LogCaptureFixture(request.node, _ispytest=True)
-
-    @pytest.fixture(scope="class")
-    def plan_model(self):
-        """Solve in plan mode for the same overrides, to check against operate mode model."""
-        model = build_model({}, "simple_supply,operate,var_costs,investment_costs")
-        model.build(mode="plan")
-        model.solve()
-        return model
-
-    @pytest.fixture(scope="class")
-    def spores_model_and_log(self, request):
-        """Iterate 2 times in SPORES mode."""
-        model = build_model({}, "spores,investment_costs")
-        model.build(mode="spores")
-        with self.caplog_session(request) as caplog:
-            with caplog.at_level(logging.INFO):
-                model.solve()
-            log = caplog.text
-
-        return model, log
-
-    @pytest.fixture(
-        scope="class",
-        params=["integer", "relative_deployment", "random", "evolving_average"],
-    )
-    def spores_model_and_log_algorithms(self, request):
-        """Iterate 2 times in SPORES mode using different scoring algorithms."""
-        model = build_model({}, "spores,investment_costs")
-        model.build(mode="spores")
-        with self.caplog_session(request) as caplog:
-            with caplog.at_level(logging.INFO):
-                model.solve(**{"spores.scoring_algorithm": request.param})
-            log = caplog.text
-
-        return model, log
-
-    @pytest.fixture(scope="class")
-    def spores_model_skip_baseline_and_log(self, request):
-        """Iterate 2 times in SPORES mode having pre-computed the baseline results."""
-        model = build_model({}, "spores,investment_costs")
-        model.build(mode="plan")
-        model.solve()
-
-        model.build(mode="spores", force=True)
-        with self.caplog_session(request) as caplog:
-            with caplog.at_level(logging.INFO):
-                model.solve(force=True, **{"spores.skip_baseline_run": True})
-            log = caplog.text
-
-        return model, log
-
-    @pytest.fixture(scope="class")
-    def spores_model_save_per_spore_and_log(self, tmp_path_factory, request):
-        """Iterate 2 times in SPORES mode and save to file each time."""
-        dir_path = tmp_path_factory.mktemp("outputs")
-        model = build_model({}, "spores,investment_costs")
-        model.build(mode="spores")
-
-        with self.caplog_session(request) as caplog:
-            with caplog.at_level(logging.INFO):
-                model.solve(**{"spores.save_per_spore_path": dir_path})
-            log = caplog.text
-
-        return model, log
-
-    @pytest.fixture(
-        scope="class",
-        params=["integer", "relative_deployment", "random", "evolving_average"],
-    )
-    def spores_model_with_tracker(self, request):
-        """Iterate 2 times in SPORES mode with a SPORES score tracking parameter."""
-        model = build_model({}, "spores,spores_tech_tracking,investment_costs")
-        model.build(mode="spores")
-        model.solve(**{"spores.scoring_algorithm": request.param})
-
-        return model
-
-    @pytest.fixture(scope="class")
-    def rerun_spores_log(self, request, spores_model_and_log):
-        """Solve in spores mode a second time, to trigger new log messages."""
-        with self.caplog_session(request) as caplog:
-            with caplog.at_level(logging.INFO):
-                spores_model_and_log[0].solve(force=True)
-            return caplog.text
-
-    def test_backend_build_mode(self, spores_model_and_log):
-        """Verify that we have run in spores mode"""
-        spores_model, _ = spores_model_and_log
-        assert spores_model.backend.config.mode == "spores"
-
-    def test_spores_mode_success(self, spores_model_and_log_algorithms):
-        """Solving in spores mode should lead to an optimal solution."""
-        spores_model, _ = spores_model_and_log_algorithms
-        assert spores_model.results.attrs["termination_condition"] == "optimal"
-
-    def test_spores_mode_3_results(self, spores_model_and_log_algorithms):
-        """Solving in spores mode should lead to 3 sets of results."""
-        spores_model, _ = spores_model_and_log_algorithms
-        assert not set(spores_model.results.spores.values).symmetric_difference(
-            ["baseline", 1, 2]
-        )
-
-    def test_spores_scores(self, spores_model_and_log_algorithms):
-        """All techs should have a spores score defined."""
-        spores_model, _ = spores_model_and_log_algorithms
-        fill_gaps = ~spores_model._model_data.definition_matrix
-        assert (
-            spores_model._model_data.spores_score_cumulative.notnull() | fill_gaps
-        ).all()
-
-    def test_spores_caps(self, spores_model_and_log_algorithms):
-        """There should be some changes in capacities between SPORES."""
-        spores_model, _ = spores_model_and_log_algorithms
-        cap_diffs = spores_model.results.flow_cap.diff(dim="spores")
-        assert (cap_diffs != 0).any()
-
-    def test_spores_algo_log(self, spores_model_and_log_algorithms):
-        """The scoring algorithm being used should be logged correctly."""
-        model, log = spores_model_and_log_algorithms
-        assert (
-            f"Running SPORES with `{model.config.solve.spores.scoring_algorithm}` scoring algorithm."
-            in log
-        )
-
-    def test_spores_scores_never_decrease_integer_algo(self, spores_model_and_log):
-        """SPORES scores can never decrease.
-
-        This is not true for all algorithms (e.g. random scoring) so we test with integer scoring.
-        """
-        spores_model, _ = spores_model_and_log
-        assert (
-            spores_model._model_data.spores_score_cumulative.fillna(0).diff("spores")
-            >= 0
-        ).all()
-
-    def test_spores_scores_increasing_with_cap_integer_algo(self, spores_model_and_log):
-        """SPORES scores increase when a tech has a finite flow_cap in the previous iteration."""
-        spores_model, _ = spores_model_and_log
-        has_cap = spores_model.results.flow_cap > 0
-        spores_score_increased = (
-            spores_model._model_data.spores_score_cumulative.diff("spores") > 0
-        )
-        numpy.testing.assert_array_equal(
-            has_cap.shift(spores=1).sel(spores=[1, 2]), spores_score_increased
-        )
-
-    def test_use_tech_tracking(self, spores_model_with_tracker):
-        """Tech tracking leads to only having spores scores for test_supply_elec."""
-        sum_spores_score = (
-            spores_model_with_tracker._model_data.spores_score_cumulative.groupby(
-                "techs"
-            ).sum(...)
-        )
-        assert (sum_spores_score.sel(techs="test_supply_elec") > 0).all()
-        assert (sum_spores_score.drop_sel(techs="test_supply_elec") == 0).all()
-
-    def test_save_per_spore_file(self, spores_model_save_per_spore_and_log):
-        """There are 4 files saved if saving per SPORE."""
-        model, _ = spores_model_save_per_spore_and_log
-        out_dir = model.config.solve.spores.save_per_spore_path
-        assert len(list(out_dir.glob("*.nc"))) == 3
-
-    @pytest.mark.parametrize("spore", ["baseline", 1, 2])
-    def test_save_per_spore(self, spores_model_save_per_spore_and_log, spore):
-        """We expect SPORES results to be saved to file once per iteration."""
-        model, _ = spores_model_save_per_spore_and_log
-        out_dir = model.config.solve.spores.save_per_spore_path
-        filename = spore if spore == "baseline" else f"spore_{spore}"
-        result = xr.open_dataset((out_dir / filename).with_suffix(".nc"))
-        assert result.spores.item() == spore
-
-    @pytest.mark.parametrize("spore", ["baseline", 1, 2])
-    def test_save_per_spore_log(self, spores_model_save_per_spore_and_log, spore):
-        """We expect SPORES results saving to be logged."""
-        _, log = spores_model_save_per_spore_and_log
-        assert f"Saving SPORE {spore} to file." in log
-
-    @pytest.mark.parametrize(
-        "spores_model", ["spores_model_and_log", "spores_model_skip_baseline_and_log"]
-    )
-    def test_save_per_spore_without_path_log(self, request, spores_model):
-        """We expect appropriate logs when SPORES results will not be saved due to lack of path."""
-        _, log = request.getfixturevalue(spores_model)
-
-        assert "Saving SPORE" not in log
-
-    def test_skip_baseline_log(self, spores_model_skip_baseline_and_log):
-        """Skipping baseline run should take existing results."""
-
-        _, log = spores_model_skip_baseline_and_log
-
-        assert "Using existing baseline model results." in log
-
-    def test_save_per_spore_skip_cost_op(
-        self, spores_model_and_log, spores_model_skip_baseline_and_log
-    ):
-        """Final result should be the same having skipped baseline."""
-
-        model_all_solved_together, _ = spores_model_and_log
-        model_baseline_solved_separately, _ = spores_model_skip_baseline_and_log
-        assert model_all_solved_together._model_data.flow_cap.equals(
-            model_baseline_solved_separately._model_data.flow_cap
-        )
-
-    def test_spores_relative_deployment_needs_max_param(self):
-        """Can only run the `relative_deployment` algorithm if all techs have flow_cap_max."""
-        model = build_model(
-            {"techs.test_supply_elec.flow_cap_max": np.inf},
-            "spores,spores_tech_tracking,investment_costs",
-        )
-        model.build(mode="spores")
-
-        with pytest.raises(
-            calliope.exceptions.BackendError,
-            match="Cannot score SPORES with `relative_deployment`",
-        ):
-            model.solve(**{"spores.scoring_algorithm": "relative_deployment"})
-
-
-class TestBuild:
-    @pytest.fixture
-    def init_model(self):
-        return build_model({}, "simple_supply,two_hours,investment_costs")
-
-    def test_ignore_mode_math(self, init_model):
-        init_model.build(ignore_mode_math=True, force=True)
-        assert all(
-            var.obj_type == "parameters"
-            for var in init_model.backend._dataset.data_vars.values()
-        )
-
-    def test_add_math_dict_with_mode_math(self, init_model):
-        init_model.build(
-            add_math_dict={"constraints": {"system_balance": {"active": False}}},
-            force=True,
-        )
-        assert len(init_model.backend.constraints) > 0
-        assert "system_balance" not in init_model.backend.constraints
-
-    def test_add_math_dict_ignore_mode_math(self, init_model):
-        new_var = {
-            "variables": {"foo": {"active": True, "bounds": {"min": -1, "max": 1}}}
-        }
-        init_model.build(add_math_dict=new_var, ignore_mode_math=True, force=True)
-        assert set(init_model.backend.variables) == {"foo"}
 
 
 class TestSolve:

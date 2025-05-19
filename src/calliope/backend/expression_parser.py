@@ -37,7 +37,6 @@ from collections.abc import Callable, Iterable, Iterator
 from typing import TYPE_CHECKING, Any, Literal, overload
 
 import numpy as np
-import pandas as pd
 import pyparsing as pp
 import xarray as xr
 from typing_extensions import NotRequired, TypedDict, Unpack
@@ -595,7 +594,7 @@ class EvalSlicedComponent(EvalToArrayStr):
         )
         id_formatted = pp.Combine("\\" + pp.Word(pp.alphas) + "{" + id_ + "}")
         obj_parser = id_formatted + pp.Opt(
-            r"_\text{" + pp.Group(pp.DelimitedList(id_)) + "}"
+            r"_\text{" + pp.Group(pp.delimited_list(id_)) + "}"
         )
         obj_parser.set_parse_action(self._replace_rule(singular_slice_refs))
         return obj_parser.parse_string(evaluated, parse_all=True)[0]
@@ -789,7 +788,7 @@ class EvalUnslicedComponent(EvalToArrayStr):
                 evaluated = backend_interface._dataset[self.name]
             except KeyError:
                 evaluated = xr.DataArray(self.name, attrs={"obj_type": "string"})
-        if "default" in evaluated.attrs and pd.notna(evaluated.attrs["default"]):
+        if "default" in evaluated.attrs:
             evaluated = evaluated.fillna(evaluated.attrs["default"])
 
         self.eval_attrs["references"].add(self.name)
@@ -870,12 +869,12 @@ def helper_function_parser(
     arg_values = pp.MatchFirst(allowed_parser_elements_in_args) + pp.NotAny("=")
 
     # define function arguments
-    arglist = pp.DelimitedList(arg_values.copy())
+    arglist = pp.delimited_list(arg_values.copy())
     args_ = pp.Group(arglist).set_results_name("args")
 
     # define function keyword arguments
     key = generic_identifier + pp.Suppress("=")
-    kwarg_list = pp.DelimitedList(pp.dict_of(key, arg_values))
+    kwarg_list = pp.delimited_list(pp.dict_of(key, arg_values))
     kwargs_ = pp.Group(kwarg_list).set_results_name("kwargs")
 
     # build generic function
@@ -943,7 +942,7 @@ def sliced_param_or_var_parser(
 
     slice = pp.Group(generic_identifier("set_name") + pp.Suppress("=") + slicer)
 
-    slices = pp.Group(pp.DelimitedList(slice))("slices")
+    slices = pp.Group(pp.delimited_list(slice))("slices")
     sliced_object_name = unsliced_object("param_or_var_name")
 
     sliced_param_or_var = pp.Combine(sliced_object_name + lspar) + slices + rspar
@@ -1036,7 +1035,7 @@ def list_parser(
         pp.ParserElement: Parser for valid lists of strings and/or numbers.
     """
     list_elements = pp.MatchFirst([evaluatable_identifier, number])
-    id_list = pp.Suppress("[") + pp.DelimitedList(list_elements) + pp.Suppress("]")
+    id_list = pp.Suppress("[") + pp.delimited_list(list_elements) + pp.Suppress("]")
     id_list.set_parse_action(ListParser)
     return id_list
 

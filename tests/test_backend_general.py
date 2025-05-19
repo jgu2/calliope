@@ -6,7 +6,6 @@ import pytest  # noqa: F401
 import xarray as xr
 
 import calliope
-import calliope.backend
 
 from .common.util import build_test_model as build_model
 from .common.util import check_error_or_warning
@@ -30,7 +29,7 @@ def built_model_cls_longnames(backend) -> calliope.Model:
 @pytest.fixture
 def built_model_func_longnames(backend) -> calliope.Model:
     m = build_model({}, "simple_supply,two_hours,investment_costs")
-    m.build(backend=backend, pre_validate_math_strings=False)
+    m.build(backend=backend)
     m.backend.verbose_strings()
     return m
 
@@ -38,7 +37,7 @@ def built_model_func_longnames(backend) -> calliope.Model:
 @pytest.fixture
 def solved_model_func(backend) -> calliope.Model:
     m = build_model({}, "simple_supply,two_hours,investment_costs")
-    m.build(backend=backend, pre_validate_math_strings=False)
+    m.build(backend=backend)
     m.solve()
     return m
 
@@ -70,7 +69,7 @@ def solved_model_cls(backend) -> calliope.Model:
 @pytest.fixture
 def built_model_func_updated_cost_flow_cap(backend, dummy_int: int) -> calliope.Model:
     m = build_model({}, "simple_supply,two_hours,investment_costs")
-    m.build(backend=backend, pre_validate_math_strings=False)
+    m.build(backend=backend)
     m.backend.verbose_strings()
     m.backend.update_parameter("cost_flow_cap", dummy_int)
     return m
@@ -153,11 +152,12 @@ class TestGetters:
         """Check a decision variable has the correct obj_type."""
         assert variable.attrs["obj_type"] == "variables"
 
-    def test_get_variable_refs(self, variable, solved_model_cls):
+    def test_get_variable_refs(self, variable):
         """Check a decision variable has all expected references to other math components."""
         assert variable.attrs["references"] == {
             "flow_in_max",
             "flow_out_max",
+            "cost_investment",
             "cost_investment_flow_cap",
             "symmetric_transmission",
         }
@@ -224,7 +224,7 @@ class TestGetters:
 
     def test_get_global_expression_refs(self, global_expression):
         """Check a global expression has all expected math component refs."""
-        assert global_expression.attrs["references"] == {"cost_investment_annualised"}
+        assert global_expression.attrs["references"] == {"cost"}
 
     def test_get_global_expression_default(self, global_expression):
         """Check a global expression has expected default."""
@@ -667,11 +667,11 @@ class TestUpdateVariable:
     def test_update_variable_error_update_parameter_instead(self, solved_model_func):
         """Check that expected error is raised if trying to update a variable bound that was set by a parameter."""
         with pytest.raises(calliope.exceptions.BackendError) as excinfo:
-            solved_model_func.backend.update_variable_bounds("flow_cap", max=1)
+            solved_model_func.backend.update_variable_bounds("flow_cap", min=1)
         assert check_error_or_warning(
             excinfo,
             "Cannot update variable bounds that have been set by parameters."
-            " Use `update_parameter('flow_cap_max')` to update the max bound of flow_cap.",
+            " Use `update_parameter('flow_cap_min')` to update the min bound of flow_cap.",
         )
 
     def test_fix_variable_before_solve(self, built_model_cls_longnames):

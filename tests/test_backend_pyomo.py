@@ -1,4 +1,6 @@
+import importlib
 import logging
+from copy import deepcopy
 from itertools import product
 
 import numpy as np
@@ -9,10 +11,9 @@ import xarray as xr
 from pyomo.core.kernel.piecewise_library.transforms import piecewise_sos2
 
 import calliope
-import calliope.backend
 import calliope.exceptions as exceptions
-import calliope.preprocess
-from calliope.backend import PyomoBackendModel
+from calliope.attrdict import AttrDict
+from calliope.backend.pyomo_backend_model import PyomoBackendModel
 
 from .common.util import build_test_model as build_model
 from .common.util import check_error_or_warning, check_variable_exists
@@ -482,7 +483,7 @@ class TestCostConstraints:
 
     def test_loc_techs_not_cost_var_constraint(self, simple_conversion):
         """I for i in sets.loc_techs_om_cost if i not in sets.loc_techs_conversion_plus + sets.loc_techs_conversion"""
-        assert "cost_operation_variable" not in simple_conversion.backend.expressions
+        assert "cost_var" not in simple_conversion.backend.expressions
 
     @pytest.mark.parametrize(
         ("tech", "scenario", "cost"),
@@ -502,7 +503,7 @@ class TestCostConstraints:
             {f"techs.{tech}.costs.monetary.{cost}": 1}, f"{scenario},two_hours"
         )
         m.build()
-        assert "cost_operation_variable" in m.backend.expressions
+        assert "cost_var" in m.backend.expressions
 
     def test_one_way_om_cost(self):
         """With one_way transmission, it should still be possible to set an flow_out cost."""
@@ -521,17 +522,13 @@ class TestCostConstraints:
             "timesteps": m.backend._dataset.timesteps[1],
         }
         assert check_variable_exists(
-            m.backend.get_expression("cost_operation_variable", as_backend_objs=False),
-            "flow_out",
-            idx,
+            m.backend.get_expression("cost_var", as_backend_objs=False), "flow_out", idx
         )
 
         idx["nodes"] = "a"
         idx["techs"] = "test_transmission_elec:b"
         assert not check_variable_exists(
-            m.backend.get_expression("cost_operation_variable", as_backend_objs=False),
-            "flow_out",
-            idx,
+            m.backend.get_expression("cost_var", as_backend_objs=False), "flow_out", idx
         )
 
 
@@ -564,18 +561,17 @@ class TestExportConstraints:
 
     def test_loc_techs_update_costs_var_constraint(self, supply_export):
         """I for i in sets.loc_techs_om_cost if i in sets.loc_techs_export"""
-        assert "cost_operation_variable" in supply_export.backend.expressions
+        assert "cost_var" in supply_export.backend.expressions
 
         m = build_model(
             {"techs.test_supply_elec.costs.monetary.flow_out": 0.1},
             "supply_export,two_hours,investment_costs",
         )
         m.build()
-        assert "cost_operation_variable" in m.backend.expressions
+        assert "cost_var" in m.backend.expressions
 
         assert check_variable_exists(
-            m.backend.get_expression("cost_operation_variable", as_backend_objs=False),
-            "flow_export",
+            m.backend.get_expression("cost_var", as_backend_objs=False), "flow_export"
         )
 
     def test_loc_tech_carriers_export_max_constraint(self):
@@ -1523,8 +1519,8 @@ class TestClusteringConstraints:
     ):
         override = {
             "config.init.time_subset": ["2005-01-01", "2005-01-04"],
-            "config.init.time_cluster": "data_tables/cluster_days.csv",
-            "config.build.add_math": (
+            "config.init.time_cluster": "data_sources/cluster_days.csv",
+            "config.init.add_math": (
                 ["storage_inter_cluster"] if storage_inter_cluster else []
             ),
             "config.build.cyclic_storage": cyclic,
@@ -1630,35 +1626,59 @@ class TestNewBackend:
     def temp_path(self, tmpdir_factory):
         return tmpdir_factory.mktemp("custom_math")
 
-    @pytest.mark.parametrize("mode", ["operate", "plan"])
+    @pytest.mark.parametrize("mode", ["operate", "spores"])
     def test_add_run_mode_custom_math(self, caplog, mode):
         caplog.set_level(logging.DEBUG)
+        mode_custom_math = AttrDict.from_yaml(
+            importlib.resources.files("calliope") / "math" / f"{mode}.yaml"
+        )
         m = build_model({}, "simple_supply,two_hours,investment_costs")
-        math = calliope.preprocess.CalliopeMath([mode])
 
-        build_config = m.config.build.update({"mode": mode})
-        backend = PyomoBackendModel(m.inputs, math, build_config)
+        base_math = deepcopy(m.math)
+        base_math.union(mode_custom_math, allow_override=True)
 
-        assert backend.math == math
+        backend = PyomoBackendModel(m.inputs, mode=mode)
+        backend._add_run_mode_math()
 
-    def test_add_run_mode_custom_math_before_build(self, caplog):
-        """Run mode math is applied before anything else."""
+        assert f"Updating math formulation with {mode} mode math." in caplog.text
+
+        assert m.math != base_math
+        assert backend.inputs.attrs["math"].as_dict() == base_math.as_dict()
+
+    def test_add_run_mode_custom_math_before_build(self, caplog, temp_path):
+        """A user can override the run mode math by including it directly in the additional math list"""
         caplog.set_level(logging.DEBUG)
-        custom_math = {"constraints": {"force_zero_area_use": {"active": True}}}
+        custom_math = AttrDict({"variables": {"flow_cap": {"active": True}}})
+        file_path = temp_path.join("custom-math.yaml")
+        custom_math.to_yaml(file_path)
 
         m = build_model(
-            {
-                "config.build.operate.window": "12h",
-                "config.build.operate.horizon": "12h",
-            },
+            {"config.init.add_math": ["operate", str(file_path)]},
             "simple_supply,two_hours,investment_costs",
         )
-        m.build(mode="operate", add_math_dict=custom_math)
+        backend = PyomoBackendModel(m.inputs, mode="operate")
+        backend._add_run_mode_math()
+
+        # We set operate mode explicitly in our additional math so it won't be added again
+        assert "Updating math formulation with operate mode math." not in caplog.text
 
         # operate mode set it to false, then our math set it back to active
-        assert m.applied_math.data.constraints.force_zero_area_use.active
+        assert m.math.variables.flow_cap.active
         # operate mode set it to false and our math did not override that
-        assert not m.applied_math.data.variables.storage_cap.active
+        assert not m.math.variables.storage_cap.active
+
+    def test_run_mode_mismatch(self):
+        m = build_model(
+            {"config.init.add_math": ["operate"]},
+            "simple_supply,two_hours,investment_costs",
+        )
+        backend = PyomoBackendModel(m.inputs)
+        with pytest.warns(exceptions.ModelWarning) as excinfo:
+            backend._add_run_mode_math()
+
+        assert check_error_or_warning(
+            excinfo, "Running in plan mode, but run mode(s) {'operate'}"
+        )
 
     def test_new_build_get_variable(self, simple_supply):
         """Check a decision variable has the correct data type and has all expected attributes."""
@@ -1843,29 +1863,6 @@ class TestNewBackend:
         assert "foo" in simple_supply.backend.objectives
         assert not simple_supply.backend.objectives.foo.item().active
 
-    def test_default_objective_set(self, simple_supply):
-        assert simple_supply.backend.objectives.min_cost_optimisation.item().active
-        assert simple_supply.backend.objective == "min_cost_optimisation"
-
-    def test_new_objective_set(self, simple_supply_build_func):
-        simple_supply_build_func.backend.add_objective(
-            "foo", {"equations": [{"expression": "bigM"}], "sense": "minimise"}
-        )
-        simple_supply_build_func.backend.set_objective("foo")
-
-        assert simple_supply_build_func.backend.objectives.foo.item().active
-        assert not simple_supply_build_func.backend.objectives.min_cost_optimisation.item().active
-        assert simple_supply_build_func.backend.objective == "foo"
-
-    def test_new_objective_set_log(self, caplog, simple_supply_build_func):
-        caplog.set_level(logging.INFO)
-        simple_supply_build_func.backend.add_objective(
-            "foo", {"equations": [{"expression": "bigM"}], "sense": "minimise"}
-        )
-        simple_supply_build_func.backend.set_objective("foo")
-        assert ":foo | Objective activated." in caplog.text
-        assert ":min_cost_optimisation | Objective deactivated." in caplog.text
-
     @staticmethod
     def _is_fixed(val):
         return val.fixed
@@ -2030,10 +2027,7 @@ class TestVerboseStrings:
             "variables[flow_cap][a, test_supply_elec, electricity]"
             in obj.sel(dims).item()
         )
-        assert (
-            "parameters[cost_flow_cap][test_supply_elec, monetary]"
-            in obj.sel(dims).item()
-        )
+        assert "parameters[cost_interest_rate]" in obj.sel(dims).item()
 
         assert not obj.coords_in_name
 
@@ -2261,86 +2255,3 @@ class TestShadowPrices:
         )
         # Since we listed only one (invalid) constraint, tracking should not be active
         assert not m.backend.shadow_prices.is_active
-
-
-class TestValidateMathDict:
-    LOGGER = "calliope.backend.backend_model"
-
-    @pytest.fixture
-    def validate_math(self):
-        def _validate_math(math_dict: dict):
-            m = build_model({}, "simple_supply,investment_costs")
-            math = calliope.preprocess.CalliopeMath(["plan", math_dict])
-            backend = calliope.backend.PyomoBackendModel(
-                m._model_data, math, m.config.build
-            )
-            backend._add_all_inputs_as_parameters()
-            backend._validate_math_string_parsing()
-
-        return _validate_math
-
-    def test_base_math(self, caplog, validate_math):
-        with caplog.at_level(logging.INFO, logger=self.LOGGER):
-            validate_math({})
-        assert "Optimisation Model | Validated math strings." in [
-            rec.message for rec in caplog.records
-        ]
-
-    @pytest.mark.parametrize(
-        ("equation", "where"),
-        [
-            ("1 == 1", "True"),
-            (
-                "sum(flow_out * flow_out_eff, over=[nodes, carriers, techs, timesteps]) <= .inf",
-                "base_tech=supply and flow_out_eff>0",
-            ),
-        ],
-    )
-    def test_add_math(self, caplog, validate_math, equation, where):
-        with caplog.at_level(logging.INFO, logger=self.LOGGER):
-            validate_math(
-                {
-                    "constraints": {
-                        "foo": {"equations": [{"expression": equation}], "where": where}
-                    }
-                }
-            )
-        assert "Optimisation Model | Validated math strings." in [
-            rec.message for rec in caplog.records
-        ]
-
-    @pytest.mark.parametrize(
-        "component_dict",
-        [
-            {"equations": [{"expression": "1 = 1"}]},
-            {"equations": [{"expression": "1 = 1"}], "where": "foo[bar]"},
-        ],
-    )
-    @pytest.mark.parametrize("both_fail", [True, False])
-    def test_add_math_fails(self, validate_math, component_dict, both_fail):
-        math_dict = {"constraints": {"foo": component_dict}}
-        errors_to_check = [
-            "math string parsing (marker indicates where parsing stopped, but may not point to the root cause of the issue)",
-            " * constraints:foo:",
-            "equations[0].expression",
-            "where",
-        ]
-        if both_fail:
-            math_dict["constraints"]["bar"] = component_dict
-            errors_to_check.append("* constraints:bar:")
-        else:
-            math_dict["constraints"]["bar"] = {"equations": [{"expression": "1 == 1"}]}
-
-        with pytest.raises(calliope.exceptions.ModelError) as excinfo:
-            validate_math(math_dict)
-        assert check_error_or_warning(excinfo, errors_to_check)
-
-    @pytest.mark.parametrize("eq_string", ["1 = 1", "1 ==\n1[a]"])
-    def test_add_math_fails_marker_correct_position(self, validate_math, eq_string):
-        math_dict = {"constraints": {"foo": {"equations": [{"expression": eq_string}]}}}
-
-        with pytest.raises(calliope.exceptions.ModelError) as excinfo:
-            validate_math(math_dict)
-        errorstrings = str(excinfo.value).split("\n")
-        # marker should be at the "=" sign, i.e., 2 characters from the end
-        assert len(errorstrings[-2]) - 2 == len(errorstrings[-1])

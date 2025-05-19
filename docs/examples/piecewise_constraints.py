@@ -25,7 +25,6 @@ import numpy as np
 import plotly.express as px
 
 import calliope
-from calliope.io import read_rich_yaml
 
 calliope.set_log_verbosity("INFO", include_solver_output=False)
 
@@ -69,20 +68,22 @@ fig.show()
 #
 
 # %%
-new_params = f"""
-  parameters:
-    capacity_steps:
-      data: {capacity_steps}
-      index: [0, 1, 2, 3, 4]
-      dims: "breakpoints"
-    cost_steps:
-      data: {cost_steps}
-      index: [0, 1, 2, 3, 4]
-      dims: "breakpoints"
-"""
+new_params = {
+    "parameters": {
+        "capacity_steps": {
+            "data": capacity_steps,
+            "index": [0, 1, 2, 3, 4],
+            "dims": "breakpoints",
+        },
+        "cost_steps": {
+            "data": cost_steps,
+            "index": [0, 1, 2, 3, 4],
+            "dims": "breakpoints",
+        },
+    }
+}
 print(new_params)
-new_params_as_dict = read_rich_yaml(new_params)
-m = calliope.examples.national_scale(override_dict=new_params_as_dict)
+m = calliope.examples.national_scale(override_dict=new_params)
 
 # %%
 m.inputs.capacity_steps
@@ -94,48 +95,55 @@ m.inputs.cost_steps
 # ## Creating our piecewise constraint
 #
 # We create the piecewise constraint by linking decision variables to the piecewise curve we have created.
-# In this example, we need:
-# 1. a new decision variable for investment costs that can take on the value defined by the curve at a given value of `flow_cap`;
-# 1. to link that decision variable to our total cost calculation; and
-# 1. to define the piecewise constraint.
+# In this example, we require a new decision variable for investment costs that can take on the value defined by the curve at a given value of `flow_cap`.
 
 # %%
-new_math = """
-  variables:
-    piecewise_cost_investment:
-      description: "Investment cost that increases monotonically"
-      foreach: ["nodes", "techs", "carriers", "costs"]
-      where: "[csp] in techs"
-      bounds:
-        min: 0
-        max: .inf
-      default: 0
-  global_expressions:
-    cost_investment_flow_cap:
-      equations:
-        - expression: "$cost_sum * flow_cap"
-          where: "NOT [csp] in techs"
-        - expression: "piecewise_cost_investment"
-          where: "[csp] in techs"
-  piecewise_constraints:
-    csp_piecewise_costs:
-      description: "Set investment costs values along a piecewise curve using special ordered sets of type 2 (SOS2)."
-      foreach: ["nodes", "techs", "carriers", "costs"]
-      where: "piecewise_cost_investment"
-      x_expression: "flow_cap"
-      x_values: "capacity_steps"
-      y_expression: "piecewise_cost_investment"
-      y_values: "cost_steps"
-"""
+m.math["variables"]["piecewise_cost_investment"] = {
+    "description": "Investment cost that increases monotonically",
+    "foreach": ["nodes", "techs", "carriers", "costs"],
+    "where": "[csp] in techs",
+    "bounds": {"min": 0, "max": np.inf},
+    "default": 0,
+}
 
 # %% [markdown]
-# # Building and checking the piecewise constraint
-#
-# With our piecewise constraint defined, we can build our optimisation problem and inject this new math.
+# We also need to link that decision variable to our total cost calculation.
 
 # %%
-new_math_as_dict = read_rich_yaml(new_math)
-m.build(add_math_dict=new_math_as_dict)
+# Before
+m.math["global_expressions"]["cost_investment_flow_cap"]["equations"]
+
+# %%
+# Updated - we split the equation into two expressions.
+m.math["global_expressions"]["cost_investment_flow_cap"]["equations"] = [
+    {"expression": "$cost_sum * flow_cap", "where": "NOT [csp] in techs"},
+    {"expression": "piecewise_cost_investment", "where": "[csp] in techs"},
+]
+
+# %% [markdown]
+# We then need to define the piecewise constraint:
+
+# %%
+m.math["piecewise_constraints"]["csp_piecewise_costs"] = {
+    "description": "Set investment costs values along a piecewise curve using special ordered sets of type 2 (SOS2).",
+    "foreach": ["nodes", "techs", "carriers", "costs"],
+    "where": "piecewise_cost_investment",
+    "x_expression": "flow_cap",
+    "x_values": "capacity_steps",
+    "y_expression": "piecewise_cost_investment",
+    "y_values": "cost_steps",
+}
+
+# %% [markdown]
+# Then we can build our optimisation problem:
+
+# %% [markdown]
+# # Building and checking the optimisation problem
+#
+# With our piecewise constraint defined, we can build our optimisation problem
+
+# %%
+m.build()
 
 # %% [markdown]
 # And we can see that our piecewise constraint exists in the built optimisation problem "backend"
@@ -181,6 +189,65 @@ fig.add_scatter(
     name="Installed capacity",
 )
 fig.show()
+
+# %% [markdown]
+# ## YAML model definition
+# We have updated the model parameters and math interactively in Python in this tutorial, the definition in YAML would look like:
+
+# %% [markdown]
+# ### Math
+#
+# Saved as e.g., `csp_piecewise_math.yaml`.
+#
+# ```yaml
+# variables:
+#   piecewise_cost_investment:
+#     description: Investment cost that increases monotonically
+#     foreach: [nodes, techs, carriers, costs]
+#     where: "[csp] in techs"
+#     bounds:
+#       min: 0
+#       max: .inf
+#     default: 0
+#
+# piecewise_constraints:
+#   csp_piecewise_costs:
+#     description: >
+#       Set investment costs values along a piecewise curve using special ordered sets of type 2 (SOS2).
+#     foreach: [nodes, techs, carriers, costs]
+#     where: "[csp] in techs"
+#     x_expression: flow_cap
+#     x_values: capacity_steps
+#     y_expression: piecewise_cost_investment
+#     y_values: cost_steps
+#
+# global_expressions:
+#   cost_investment_flow_cap.equations:
+#     - expression: "$cost_sum * flow_cap"
+#       where: "NOT [csp] in techs"
+#     - expression: "piecewise_cost_investment"
+#       where: "[csp] in techs"
+# ```
+
+# %% [markdown]
+# ### Scenario definition
+#
+# Loaded into the national-scale example model with: `calliope.examples.national_scale(scenario="piecewise_csp_cost")`
+#
+# ```yaml
+# overrides:
+#   piecewise_csp_cost:
+#     config.init.add_math: [csp_piecewise_math.yaml]
+#     parameters:
+#       capacity_steps:
+#         data: [0, 2500, 5000, 7500, 10000]
+#         index: [0, 1, 2, 3, 4]
+#         dims: "breakpoints"
+#       cost_steps:
+#         data: [0, 3.75e6, 6e6, 7.5e6, 8e6]
+#         index: [0, 1, 2, 3, 4]
+#         dims: "breakpoints"
+# ```
 
 # %% [markdown]
 # ## Troubleshooting

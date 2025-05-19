@@ -104,8 +104,9 @@ nav:
     - Model configuration: creating/config.md
     - Technologies: creating/techs.md
     - Nodes: creating/nodes.md
+    - Inheriting from templates: creating/templates.md
     - Indexed parameters: creating/parameters.md
-    - Loading data tables: creating/data_tables.md
+    - Loading tabular data: creating/data_sources.md
     - Scenarios and overrides: creating/scenarios.md
   - Running a model: running.md
   - Analysing a model: analysing.md
@@ -116,7 +117,6 @@ nav:
     - user_defined_math/index.md
     - user_defined_math/components.md
     - user_defined_math/syntax.md
-    - user_defined_math/helper_functions.md
     - user_defined_math/customise.md
     - Example additional math gallery:
       - user_defined_math/examples/index.md
@@ -132,7 +132,6 @@ nav:
       - examples/milp/index.md
       - examples/milp/notebook.py
     - examples/loading_tabular_data.py
-    - examples/modes.py
     - examples/piecewise_constraints.py
     - examples/calliope_model_object.py
     - examples/calliope_logging.py
@@ -158,7 +157,7 @@ nav:
       - reference/api/exceptions.md
       - reference/api/logging.md
     - reference/config_schema.md
-    - reference/data_table_schema.md
+    - reference/data_source_schema.md
     - reference/model_schema.md
     - reference/math_schema.md
   - migrating.md
